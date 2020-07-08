@@ -1,0 +1,22 @@
+#!/bin/bash
+
+declare -r -i NO_OF_HBA_CARDS=3
+declare -r -i DRIVES_PER_CARD=8
+
+for (( card=0; card < ${NO_OF_HBA_CARDS}; card++ ))
+do
+    for (( disk=0; disk < ${DRIVES_PER_CARD} ; disk++ ))
+    do
+        printf "${card}:"
+        details="$(sudo /opt/MegaRAID/perccli/perccli64 /c${card}/p${disk} show|grep Gbps|sed 's/ *$//g')"
+        if [ -z "${details}" ]
+        then
+            printf "${disk} No disk present\n"
+        else
+            details="${details%"N/A"}" #remove N/A
+            details="${details#${details%%[![:space:]]*}}" #remove leading space
+            details="${details%${details##*[![:space:]]}}" #remove trailing space
+            printf "${details}\n"
+        fi
+    done
+done

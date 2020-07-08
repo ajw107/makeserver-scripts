@@ -1,0 +1,25 @@
+function startService () {
+echo "Starting $1..."
+sudo service $1 start
+if [ "$?" != "0" ]
+then
+    echo "ERROR: failed to start $1 service"
+fi
+}
+
+#startService vivaldiframeworkd
+startService plexmediaserver
+startService docker
+cd /home/alex/docker-compose-scripts/TheMatrix
+docker-compose start
+xpra-filezilla
+#startService deluged
+#startService delugeweb
+startService smbd
+startService nfs-kernel-server
+startService tftpd-hpa
+startService grafana-server
+startService influxdb
+startService kapacitor
+startService chronograf
+startService mysql

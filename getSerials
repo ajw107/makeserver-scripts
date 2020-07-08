@@ -1,0 +1,35 @@
+#!/bin/bash
+
+declare -r WantedDriveType="disk"
+declare -r UnwantedType="VMware"
+
+#get all the drives present
+count=1
+for driveLocation in $(  lsscsi --generic | awk '{ print $1 }' | tr -d [ | tr -d ] )
+do
+    driveInfo="$(  lsscsi --generic ${driveLocation}  )"
+    drive="$(  echo "${driveInfo}" | awk {'print $NF'} )"
+    driveType="$(  echo "${driveInfo}" | awk {'print $2'} )"
+    interfaceType="$(  echo "${driveInfo}" | awk {'print $3'} )"
+    if ( [ "${driveType}" == "${WantedDriveType}" ] && [ "${interfaceType}" != "${UnwantedType}" ] )
+    then
+        letter="$(  lsscsi ${driveLocation} | awk '{ print $NF }' | awk -F '/' '{ print $NF }' )"
+        wwn="$( ls -al /dev/disk/by-id/wwn* | grep ${letter} | awk '{ print $9 }' )"
+        scsi_info="$(sudo sginfo -i -s ${drive} )" #| head -10)"
+        serial="$(echo "${scsi_info}" | grep "Serial" | awk -F "'" '{ print $((NF-1)) }' | tr -d ' ' )"
+        serial2="$(udevadm info --query=all --name=${drive} | grep SCSI_IDENT_SERIAL)"
+        #awk -F " " '{ print $NF }' | tr -d \' )"
+        vendor="$(echo "${scsi_info}" | grep "Vendor" | awk -F " " '{ print $NF }')"
+        product="$(echo "${scsi_info}" | grep "Product" | awk -F " " '{ print $NF }')"
+        printf "[${count}] [${driveLocation}] [${driveType}] [${interfaceType}] [${drive}] [${vendor}] [${product}]: [${serial}] [${serial2}] [${letter}] [${wwn}]\n"
+        let count++
+    fi
+done
+
+for disk in $(ls -al /dev/disk/by-id/wwn-0x500* | grep "dm-" | awk '{ print $9 }')
+do
+    letter="$( ls -al ${disk} | awk -F '/' '{ print $NF }' )"
+    printf "${disk}"
+    serial="$(sudo sginfo -s ${disk} | awk -F "'" '{ print $2 }' | tr -d ' ')"
+    printf " ${letter} ${serial}\n"
+done

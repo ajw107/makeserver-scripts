@@ -1,0 +1,71 @@
+#!/bin/bash
+#####TODO
+#make all locations copied to definable constants
+#make it choosable if to target (server tgt) or initiate (client iscsiadm)
+#I'm sure I have to define the server somewhere for the initiator (iscsiadm)
+#EVERYTHING
+
+######Import common functions and constants
+commFuncFile="${HOME}/bin/commonfunctions"
+if $(sudo test -e "${commFuncFile}")
+then
+    echo "Loading ${commFuncFile}..."
+    . "${commFuncFile}"
+fi
+
+######Initialise Variables
+#grab sensitive values
+secretsFile="${HOME}/secrets/$(basename "${BASH_SOURCE}")_secrets"
+if $(sudo test -e "${secretsFile}")
+then
+    echo "Loading ${secretsFile}..."
+    . "${secretsFile}"
+fi
+
+declare -r PROG_NAME="makeIscsi"
+declare -r PROG_VER="1.0"
+declare -r AUTHOR="Alex Wood"
+declare -r AUTHOR_EMAIL="alex@alex-wood.org.uk"
+echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+
+#######Functions
+
+
+#######Optiona nd Parameter (Argument) Parsing
+
+
+#######Main Code
+#echo -e "${NORMAL_TEXT}${NORMAL_BACKGROUND}Clearing screen...${NORMAL_TEXT}${NORMAL_BACKGROUND}"
+#echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+#clear
+echo -e "${INFO_TEXT_START}Main Code Start[${PROG_NAME} v${PROG_VER} by ${AUTHOR} (${AUTHOR_EMAIL})]${NORMAL_TEXT}"
+
+if [ -v 1]
+then
+    if [ "${1}" == "-t" ]
+    then
+        #sudo cp -f -p /mnt/sda/home/alex/tgt-targets.conf.temp /etc/tgt/tgt.conf
+        sudo tgtadm --lld iscsi --op new --mode target --tid 1 -T ${IQN}
+        sudo tgtadm --lld iscsi --op new --mode logicalunit --tid 1 --lun 1 -b ${TARGET_DEVICE}
+        sudo tgtadm --lld iscsi --op bind --mode target --tid 1 -I ${NETMASK}
+        sudo tgt-admin --dump | sudo tee "${TGT_CONF_FILE}"
+        sudo service tgt restart
+        echo -e "${INFO_TEXT_START}Target [${TARGET_DEVICE}] shared from $[{IQN}] for all user on the network [${NETMASK}]...${NORMAL_TEXT}"
+    elif [ "${1}" == "-i" ]
+    then
+        echo -e "${INFO_TEXT_START}Scanning for iSCSI Devices...${NORMAL_TEXT}"
+        sudo iscsiadm --mode discoverydb --type sendtargets --portal ${ISCSI_TARGET_IP} --discover
+        echo -e "${INFO_TEXT_START}Aquiring iSCSI Device [${IQN}]...${NORMAL_TEXT}"
+        sudo iscsiadm --mode node --targetname ${IQN} --portal ${ISCSI_TARGET_IP} --login
+        makeDirectory "${ISCSI_MOUNTPOINT}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+        sudo mount ${ISCSI_MOUNTPOINT} ${ISCSI_DEVICE}
+        echo -e "${INFO_TEXT_START}Initiated Mount of [${ISCSI_DEVICE}] at [${ISCSI_MOUNTPOINT}]...${NORMAL_TEXT}"
+    else
+        echo -e "${ERROR_START_TEXT}Incorrect Argument Given [${@}].  Only -t (Target/Share) or -i (Initiate/Mount) are valid${NORMAL_TEXT}"
+        exit ${ERROR_BAD_ARGUMENT}
+    fi
+else
+    echo -e "${ERROR_START_TEXT}Incorrect Argument Given [${@}].  Only -t (Target/Share) or -i (Initiate/Mount) are valid${NORMAL_TEXT}"
+    exit ${ERROR_BAD_ARGUMENT}
+fi
+

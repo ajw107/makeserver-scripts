@@ -1,0 +1,1158 @@
+#!/usr/bin/env bash
+####This file contains functions and Constants I use on a regular basis,
+####for easy importing into my bashscripts and saving hours of recreating
+####the same things over and over again
+####Alex Wood (alex@alex-wood.org.uk
+####last modified: 15/9/2019 - added cleanMusic function
+
+###TODO
+#- debug output make all cmds print on debug=true using debugEcho and then eval cmd
+#- when moving and copying files, make sure the correct alias is set
+#- flesh out the installGDrive function
+#- when copying dir at the moment it just warns if error and continues
+#  best to check what the error is, and if okay (i.e. copying a link
+#  then continue, but if a general error then stop
+#- appendToFile isn;t working when large amount of text is input via 
+#  cat <filename> seems to try and execute it via grep
+#- download function needs error checks
+#- split the CopyFile up into smaller functions so it's easier to debug, it's way to complex for what it is
+
+#error on undeclare vars (incase of typos on my behalf)
+#can't remember what -o pipefail does (so i removed it, as it caused intermitent errors)
+#obviously something to do with |
+set -u
+
+######Initialise Variables
+#declare -r SAVE_SCREEN="$(tput smcup)"
+#declare -r RESTORE_SCREEN="$(tput rmcup)"
+#${SAVE_SCREEN}
+#tput smcup
+
+######Initialise Variables
+#grab sensitive values
+secretsFile="${HOME}/secrets/$(basename "${BASH_SOURCE}")_secrets"
+if $(sudo test -e "${secretsFile}")
+then
+    echo "Loading ${secretsFile}..."
+    . "${secretsFile}"
+fi
+
+declare -r OLD_FILE_DIR_LOCAL="${USER_HOME_DIR_LOCAL}/originals"
+declare -r OLD_FILE_SUFFIX="-moved-by-$(basename ${0})-$(date +%F_%H-%M-%S)"
+declare -r USER_BIN_DIR_LOCAL="${USER_HOME_DIR_LOCAL}/bin"
+declare -r GIT_DIR_LOCAL="${USER_HOME_DIR_LOCAL}/git"
+declare -r DOCKER_GIT_DIR_LOCAL="${USER_HOME_DIR_LOCAL}/dockers"
+declare -r USER_INSTALLERS_DIR_LOCAL="${USER_HOME_DIR_LOCAL}/installFiles"
+declare -r BASH_COMPLETION_LOCAL="${ETC_DIR_LOCAL}/bash_completion.d"
+declare -r GDRIVE_MOUNTPOINT="${USER_HOME_DIR_LOCAL}/gdrive"
+declare -r USER_BIN_DIR_REMOTE="${REMOTE_MOUNTPOINT}${USER_BIN_DIR_LOCAL}"
+declare -r ETC_DIR_REMOTE="${REMOTE_MOUNTPOINT}${ETC_DIR_LOCAL}"
+declare -r MAKESERVER_CONFIG_FILES_DIR_LOCAL="${USER_HOME_DIR_LOCAL}/configMakeServer"
+declare -r ROOT_HOME_DIR_REMOTE="${REMOTE_MOUNTPOINT}${ROOT_HOME_DIR_LOCAL}"
+declare -r DOCKERUSER_HOME_DIR_REMOTE="${REMOTE_MOUNTPOINT}${DOCKERUSER_HOME_DIR_LOCAL}"
+declare -r VAR_DIR_REMOTE="${REMOTE_MOUNTPOINT}${VAR_DIR_LOCAL}"
+declare -r OPT_DIR_REMOTE="${REMOTE_MOUNTPOINT}${OPT_DIR_LOCAL}"
+declare -r DEFAULT_FSTAB_LOCATION_LOCAL="${ETC_DIR_LOCAL}/fstab"
+declare fstabLocation="${DEFAULT_FSTAB_LOCATION_LOCAL}"
+declare -a -r SERVICES_TO_HOLD_UNTIL_RAID_MOUNTED=( "docker" "smbd" "nfs-server" "influxdb" "telegraf" "kapacitor" "chronograf" "plexmediaserver" "grafana-server" "tftpd-hpa" ) #These services use the Pool and/or RAID, so starting them before they are mounted (assuming RAID is mounted last) would be silly
+### "deluged" "delugeweb"
+declare -r SERVICES_TO_NOT_RESTART="systemd-.*|dbus.*|accounts-.*|containerd.*|irqbalance.*|kerneloops.*|lvm2-lvmetad.*|rsyslog.*|rtkit-.*|snapd.*|udisks2.*|unattended-.*|whoopsie.*|upower.*|wpa_.*|polkit.*|packagekit.*|gdm.*|colord.*|acpid.*|plex.*"  #These services disstablise the system of restarted, so skip them when restarting services pattern is |service name or part thereof.*
+declare -i -r TRUE=1
+declare -i -r FALSE=0
+declare -i -r SUCCESS=1
+declare -i -r FAIL=0
+declare -i DEBUG=${FALSE}
+declare -i retVal
+declare -r -i ERROR_FILE_MISSING=2
+declare -r -i ERROR_DOWNLOADING_KEY=3
+declare -r -i ERROR_IMPORTING_KEY=4
+declare -r -i ERROR_BAD_MOUNTPOINT=5
+declare -r -i ERROR_DEVICE_NOT_MOUNTED=6
+declare -r -i ERROR_DEVICE_MIS_MOUNTED=7
+declare -r -i ERROR_COPYING_FILE=8
+declare -r -i ERROR_REMOVING_DIRECTORY=9
+declare -r -i ERROR_CREATING_DIRECTORY=10
+declare -r -i ERROR_LINKING_FILE=11
+declare -r -i ERROR_REMOVING_FILE=12
+declare -r -i ERROR_FILE_EXISTS_MOUNTPOINT=13
+declare -r -i ERROR_WRONG_COPY_MODE=14
+declare -r -i ERROR_MOVING_DIRECTORY=15
+declare -r -i ERROR_MOVING_FILE=16
+declare -r -i ERROR_BAD_DESTINATION=17
+declare -r -i ERROR_BAD_SOURCE=18
+declare -r -i ERROR_NO_SUDO=19
+declare -r -i ERROR_BAD_ARGUMENT=20
+declare -r -i ERROR_MOUNTED_WRONG_LOCATION=21
+declare -r -i ERROR_WRONG_DEVICE_MOUNTED=22
+declare -r -i ERROR_UNKNOWN_MOUNT_ERROR=23
+declare -r -i ERROR_POOL_MOUNT_OCCUPIED=24
+declare -r -i ERROR_MOUNT_FAILED=25
+declare -r -i ERROR_DRIVE_MISSING=26
+declare -r -i ERROR_DOWNLOAD_FAILED=27
+declare -r -i ERROR_DRIVE_NOT_RESPONDING=28
+declare -r -i ERROR_DRIVE_MOUNTED_READ_ONLY=29
+declare -r -i ERROR_BAD_DRIVE_TEMP=-30
+declare -r -i ERROR_COMMAND_FAILED=31
+declare -r -i ERROR_FSCK_FAILED=32
+declare -r NORMAL_TEXT="$(tput sgr0)" &>/dev/null # No Color
+declare -r NORMAL_BACKGROUND="$(tput setab 9)" &>/dev/null
+declare -r RED_TEXT="$(tput setaf 1)" &>/dev/null
+declare -r WHITE_TEXT="$(tput setaf 7)" &>/dev/null
+declare -r GREEN_TEXT="$(tput setaf 2)" &>/dev/null
+declare -r BLUE_TEXT="$(tput setaf 4)" &>/dev/null
+declare -r BLACK_TEXT="$(tput setaf 0)" &>/dev/null
+declare -r YELLOW_TEXT="$(tput setaf 3)" &>/dev/null
+declare -r MAGENTA_TEXT="$(tput setaf 5)" &>/dev/null
+declare -r CYAN_TEXT="$(tput setaf 6)" &>/dev/null
+declare -r WHITE_BACKGROUND="$(tput setab 7)" &>/dev/null
+declare -r RED_BACKGROUND="$(tput setab 1)" &>/dev/null
+declare -r GREEN_BACKGROUND="$(tput setab 2)" &>/dev/null
+declare -r BLUE_BACKGROUND="$(tput setab 4)" &>/dev/null
+declare -r YELLOW_BACKGROUND="$(tput setab 3)" &>/dev/null
+declare -r MAGENTA_BACKGROUND="$(tput setab 5)" &>/dev/null
+declare -r CYAN_BACKGROUND="$(tput setab 6)" &>/dev/null
+declare -r BLACK_BACKGROUND="$(tput setab 0)" &>/dev/null
+declare -r BLINK="$(tput blink)" &>/dev/null
+declare -r INVERT="$(tput rev)" &>/dev/null
+declare -r BOLD="$(tput bold)" &>/dev/null
+declare -r UNDERLINE="$(tput smul)" &>/dev/null
+declare -r STANDOUT="$(tput smso)" &>/dev/null
+declare -r CLEAR_LINE="\033[2K"
+declare -r ERROR_BLINK_TEXT=${NORMAL_TEXT}${RED_BACKGROUND}${WHITE_TEXT}${BLINK}${BOLD} &>/dev/null
+declare -r ERROR_NORMAL_TEXT=${NORMAL_TEXT}${RED_TEXT}${BOLD} &>/dev/null
+declare -r OK_BOLD_TEXT=${NORMAL_TEXT}${GREEN_BACKGROUND}${BLUE_TEXT}${BOLD} &>/dev/null
+declare -r OK_NORMAL_TEXT=${NORMAL_TEXT}${GREEN_TEXT}${BOLD} &>/dev/null
+declare -r ERROR_TEXT_START="${ERROR_BLINK_TEXT}ERROR${ERROR_NORMAL_TEXT}: " &>/dev/null
+declare -r WARNING_TEXT_START="${BLUE_BACKGROUND}${WHITE_TEXT}${BOLD}${BLINK}WARNING${NORMAL_TEXT}: " &>/dev/null
+declare -r INFO_TEXT_START="${YELLOW_BACKGROUND}${BLUE_TEXT}${BOLD}${BLINK}INFO${NORMAL_TEXT}: " &>/dev/null
+declare -r INFO_TEXT_APPLY=1
+declare -r INFO_TEXT_INSTALL=2
+declare -r INFO_TEXT_SETUP=3
+declare -r INFO_TEXT_ADD=4
+declare -r INFO_TEXT_COPY=5
+declare -r INFO_TEXT_DOWNLOAD=6
+declare -r INFO_TEXT_MISC=7
+declare -r INFO_TEXT_MISC_NO_DOTS=8
+#declare -r INFO_TEXT_=
+echo -e "${NORMAL_TEXT}${NORMAL_BACKGROUND}${BLACK_BACKGROUND}${WHITE_TEXT}   "
+
+######Functions
+function debugEcho()
+{
+    local msg="${1}"
+
+    if [ "${DEBUG}" == "${TRUE}" ]
+    then
+        echo -e "${WHITE_BACKGROUND}${BLACK_TEXT}${BOLD}${BLINK}DEBUG${NORMAL_TEXT}: ${msg}${NORMAL_TEXT}"
+    fi
+}
+
+function infoText()
+{
+    local section=${1}
+    local type=${2}
+
+    case ${type} in
+    ${INFO_TEXT_APPLY})
+        printf "${INFO_TEXT_START}Applying ${section} Settings...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_INSTALL})
+        printf "${INFO_TEXT_START}Installing ${section}...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_SETUP})
+        printf "${INFO_TEXT_START}Setting Up ${section}...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_ADD})
+        printf "${INFO_TEXT_START}Adding ${section}...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_COPY})
+        printf "${INFO_TEXT_START}Copying Over ${section} files/directories...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_DOWNLOAD})
+        printf "${INFO_TEXT_START}Downloading ${section}...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_MISC})
+        printf "${INFO_TEXT_START}${section}...${NORMAL_TEXT}\n"
+        ;;
+    ${INFO_TEXT_MISC_NO_DOTS}|*)
+        printf "${INFO_TEXT_START}${section}${NORMAL_TEXT}\n"
+        ;;
+    esac
+}
+
+
+function errorText ()
+{
+    local msgText="${1}"
+
+    printf "${ERROR_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+
+function warnText ()
+{
+    local msgText="${1}"
+
+    printf "${WARNING_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+
+function runCommand ()
+{
+   local userName="${1}"
+   local cmd="${2}"
+
+   debugEcho "Executing Command as User [${userName}]: [${cmd}]"
+   sudo -H -u ${userName} bash -c "eval \"${cmd}\""
+   #sudo -u ${userName} -H eval "${cmd}"
+   retVal=$?
+   if (( ${retVal} != 0 ))
+   then
+       errorText "Command [${cmd}] failed with exit code [${retVal}]"
+       exit ${ERROR_COMMAND_FAILED}
+   fi
+}
+
+
+function deleteFile()
+{
+    local filenameToDelete="${1}"
+
+    if $(sudo test -e "${filenameToDelete}")
+    then
+        if $(sudo test -d "${filenameToDelete}")
+        then
+            runCommand "${ROOT_USER_NAME}" "rm -rf '${filenameToDelete}'"
+        else
+            runCommand "${ROOT_USER_NAME}" "rm -f '${filenameToDelete}'"
+        fi
+    fi
+}
+
+
+# isInArray <Item to Check for> <Array>
+# RETURNS: @? ${SUCCESS} on finding ${FAIL} on not
+#          'x=isInArray ${y} "z" echos index of first match on finding -1 on not
+function isInArray ()
+{
+    local itemToScanFor="${1}"
+    local -n arrayToScan=${2}
+
+    local -i index=0
+    local element
+
+#    debugEcho "Checking for [${1}] in [${@:2}]"
+    for element in "${arrayToScan[@]}"
+    do
+        if [ "${element}" == "${itemToScanFor}" ]
+        then
+#            debugEcho "Match"
+            echo ${index}
+            return ${SUCCESS}
+#            return ${index}
+#        else
+#            debugEcho "No Match Yet"
+        fi
+        let index+=1
+    done
+#    debugEcho "No Match"
+    echo "-1"
+    return ${FAIL}
+}
+
+#Remove an element from an array.  Pass element to remove (as a string, not the index the actual item) and array name
+function removeFromArray()
+{
+    local itemToRemove="${1}"
+    local -n arrayToAlter=${2}
+
+    local indexToRemove
+
+    indexToRemove=$(isInArray ${itemToRemove} "arrayToAlter")
+    retVal=$?
+#    debugEcho "indexToRemove: ${indexToRemove}"
+#    debugEcho "retVal: ${retVal}"
+    if [ "$retVal" == "${SUCCESS}" ]
+    then
+#        debugEcho "Removing [${KNOWN_SERIALS[indexToRemove]}]"
+        unset arrayToAlter[indexToRemove]
+        #gaps in the array mess up indexing, remove them
+        arrayToAlter=( "${arrayToAlter[@]}" )
+    else
+#        debugEcho "Not Found"
+        return ${FAIL}
+    fi
+    return ${SUCCESS}
+}
+
+function getMax ()
+{
+    local maximum="$1"
+    for i in "$@"
+    do
+        if [ "${i}" -gt "${maximum}" ]
+        then
+            maximum="${i}"
+        fi
+    done
+    echo "${maximum}"
+}
+
+function printTable()
+{
+    local -r delimiter="${1}"
+    local -r data="$(removeEmptyLines "${2}")"
+
+    if [[ "${delimiter}" != '' && "$(isEmptyString "${data}")" = 'false' ]]
+    then
+        local -r numberOfLines="$(wc -l <<< "${data}")"
+
+        if [[ "${numberOfLines}" -gt '0' ]]
+        then
+            local table=''
+            local i=1
+
+            for ((i = 1; i <= "${numberOfLines}"; i = i + 1))
+            do
+                local line=''
+                line="$(sed "${i}q;d" <<< "${data}")"
+
+                local numberOfColumns='0'
+                numberOfColumns="$(awk -F "${delimiter}" '{print NF}' <<< "${line}")"
+
+                #Characters for line drawing (just copy and paste) ┃ ╋ ━ ┏ ┓ ┗ ┛ ┳ ┻ ┣ ┫
+                # Add top of table
+                if [[ "${i}" -eq '1' ]]
+                then
+                    table="${table}$(printf '┏%s#┓' "$(repeatString '#┳' "$((${numberOfColumns}-1))")")"
+                fi
+
+                # Add fields with dividers
+                table="${table}\n"
+
+                local j=1
+                for ((j = 1; j <= "${numberOfColumns}"; j = j + 1))
+                do
+                    table="${table}$(printf '#┃%s' "$(cut -d "${delimiter}" -f "${j}" <<< "${line}")")"
+                done
+
+                table="${table}#┃\n"
+
+                # Add Line Delimiter
+
+                if [[ "${i}" -eq '1' ]] # || [[ "${numberOfLines}" -gt '1' && "${i}" -eq "${numberOfLines}" ]]
+                then
+                    #Characters for line drawing (just copy and paste) ┃ ╋ ━ ┏ ┓ ┗ ┛ ┳ ┻ ┣ ┫
+                    table="${table}$(printf '┣%s#┫' "$(repeatString '#╋' "$((${numberOfColumns}-1))")")"
+                elif [[ "${numberOfLines}" -gt '1' && "${i}" -eq "${numberOfLines}" ]]
+                then
+                    #Characters for line drawing (just copy and paste) ┃ ╋ ━ ┏ ┓ ┗ ┛ ┳ ┻ ┣ ┫
+                    table="${table}$(printf '┗%s#┛' "$(repeatString '#┻' "$((${numberOfColumns}-1))")")"
+                fi
+            done
+
+            if [[ "$(isEmptyString "${table}")" = 'false' ]]
+            then
+                #generate table
+                local formattedTable=$(echo -e "${table}" | column -s '#' -t)
+#                echo -e "${formattedTable}"
+#                read -p "Processed by columns" ignoreme
+                #fill in spaces between + (corners) with lines
+                formattedTable=$(echo -e "${formattedTable}"  | awk '/^┏/{gsub(" ", "━", $0)}1')
+#                echo -e "${formattedTable}"
+#                read -p "Processed by awk's gsub for top of table" ignoreme
+                formattedTable=$(echo -e "${formattedTable}"  | awk '/^┣/{gsub(" ", "━", $0)}1')
+#                echo -e "${formattedTable}"
+#                read -p "Processed by awk's gsub for row diviers" ignoreme
+                formattedTable=$(echo -e "${formattedTable}"  | awk '/^┗/{gsub(" ", "━", $0)}1')
+#                echo -e "${formattedTable}"
+#                read -p "Processed by awk's gsub for bottom of table" ignoreme
+                #trim off extra spacesat end of each field (put in by columns)
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/  ┃/┃/g')
+#                echo -e "${formattedTable}"
+#                read -p "Trimmed spaces at end of field" ignoreme
+                #also need to trim off the lines
+                #Characters for line drawing (just copy and paste) ┃ ╋ ━ ┏ ┓ ┗ ┛ ┳ ┻ ┣ ┫
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/━━┓/┓/g')
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/━━┛/┛/g')
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/━━╋/╋/g')
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/━━┫/┫/g')
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/━━┻/┻/g')
+                formattedTable=$(echo -e "${formattedTable}"  | sed -e 's/━━┳/┳/g')
+                echo -e "${formattedTable}"
+            fi
+        fi
+    fi
+}
+
+function removeEmptyLines()
+{
+    local -r content="${1}"
+
+    echo -e "${content}" | sed '/^\s*$/d'
+}
+
+function repeatString()
+{
+    local -r string="${1}"
+    local -r numberToRepeat="${2}"
+
+    if [[ "${string}" != '' && "${numberToRepeat}" =~ ^[1-9][0-9]*$ ]]
+    then
+        local -r result="$(printf "%${numberToRepeat}s")"
+        echo -e "${result// /${string}}"
+    fi
+}
+
+function isEmptyString()
+{
+    local -r string="${1}"
+
+    if [[ "$(trimString "${string}")" = '' ]]
+    then
+        echo 'true' && return 0
+    fi
+
+    echo 'false' && return 1
+}
+
+function trimString()
+{
+    local -r string="${1}"
+
+    sed 's,^[[:blank:]]*,,' <<< "${string}" | sed 's,[[:blank:]]*$,,'
+}
+
+function listDir()
+{
+    local location="${1}"
+    if $(sudo test -d "${location}")
+    then
+        sudo ls -ald "${location}"
+    else
+        sudo ls -al "${location}"
+    fi
+}
+
+function makeDirectory()
+{
+    local dirName="${1}"
+    local owner="${2}"
+
+    if ! $(sudo test -e "${OLD_FILE_DIR_LOCAL}")
+    then
+        sudo mkdir -p "${OLD_FILE_DIR_LOCAL}"
+        sudo chown ${USER_NAME}:${GROUP_NAME} "${OLD_FILE_DIR_LOCAL}"
+    fi
+    if $(sudo test -e "${dirName}") && [[ "${dirName}" != *"${OLD_FILE_DIR_LOCAL}"* ]]
+    then
+        local oldDirName="${OLD_FILE_DIR_LOCAL}${dirName}${OLD_FILE_SUFFIX}"
+        infoText "Creating Directory [${oldDirName}]" ${INFO_TEXT_MISC}
+        sudo mkdir -p "$(dirname ${oldDirName})"
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Making old directory/file [$(dirname ${oldDirName})]. mkdir returned error code [${retVal}]"
+            listDir "$(dirname ${oldDirName})"
+            exit ${ERROR_CREATING_DIRECTORY}
+        fi
+        sudo chown "${owner}" "$(dirname ${oldDirName})"
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            warnText "Changing owner on old directory/file [$(dirname ${oldDirName})] -> [${owner}]. chown returned error code [${retVal}]"
+            listDir "$(dirname ${oldDirName})"
+        fi
+        warnText "[${dirName}] exists, moving it to [${oldDirName}]"
+        local cmd="sudo mv -fT \"${dirName}\" \"${oldDirName}\""
+        debugEcho -e "CMD: [${cmd}]"
+        eval ${cmd}
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Moving old directory/file [${dirName}] -> [${oldDirName}]. mv returned error code [${retVal}]"
+            listDir "${dirName}"
+            listDir "${oldDirName}"
+            exit ${ERROR_MOVING_DIRECTORY}
+        fi
+    elif $(sudo test -e "${dirName}") && [[ "${dirName}" == *"${OLD_FILE_DIR_LOCAL}"* ]]
+    then
+         infoText "Whilst trying to create the directory [${dirName}] - it is already in the originals directory.  Not doing anything." ${INFO_TEXT_MISC_NO_DOTS}
+         return
+    fi
+    infoText "Creating Directory [${dirName}]" ${INFO_TEXT_MISC}
+    sudo mkdir -p "${dirName}"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        errorText "Creating directory [${dirName}]. mkdir returned error code [${retVal}]"
+        listDir "${dirName}"
+        exit ${ERROR_CREATING_DIRECTORY}
+    fi
+    sudo chown -R ${owner} "${dirName}"
+}
+
+function getAptKey ()
+{
+    local pkgName="${1}"
+    local aptURL="${2}"
+    local tempKey=$(tempfile)
+
+    infoText "${pkgName} APT key" ${INFO_TEXT_DOWNLOAD}
+    curl -fSL "${aptURL}" --output "${tempKey}"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        errorText "Downloading apt key for ${pkgName} at [${aptURL}]. curl returned error code [${retVal}]"
+        deleteFile "${tempKey}"
+        exit ${ERROR_DOWNLOADING_KEY}
+    fi
+    sudo apt-key add "${tempKey}"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        errorText "Importing apt key for ${pkgName}. apt-key returned error code [${retVal}]"
+        deleteFile "${tempKey}"
+        exit ${ERROR_IMPORTING_KEY}
+    fi
+    deleteFile "${tempKey}"
+}
+
+function checkMount()
+{
+    local mountPoint="${1}"
+    local device="${2}"
+    local mountInfo=""
+    local deviceInfo=""
+
+    #I tend to use /dev/disk/by-id to get drives
+    #so make sure they are always of the form /dev/sdX
+    device="/dev/$(ls -al ${device} | awk '{print $NF}' | awk -F/ '{print $NF}')"
+
+    if ! $(sudo test -e "${mountPoint}")
+    then
+        makeDirectory "${mountPoint}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+        sudo mount "${device}" "${mountPoint}"
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Mounting [${device}] -> [${mountPoint}]. mount returned error code [${retVal}]"
+            listDir "${device}"
+            listDir "${mountPoint}"
+            exit ${ERROR_BAD_MOUNTPOINT}
+        fi
+    elif ! $(sudo test -d "${mountPoint}")
+    then
+        #We could move it out of the way, but just in case
+        #it's important, we'd better not
+        errorText "Something other than a directory exists at [${mountPoint}]"
+        listDir "${mountPoint}"
+        exit ${ERROR_FILE_EXISTS_MOUNTPOINT}
+    fi
+
+    sudo mountpoint -q "${mountPoint}"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        warnText "Nothing is mounted at [${mountPoint}]. mountpoint returned error code [${retVal}].  Attempting to mount [${device}]"
+        sudo mount "${device}" "${mountPoint}"
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Mounting [${device}] -> [${mountPoint}]. mount returned error code [${retVal}]"
+            listDir "${device}"
+            listDir "${mountPoint}"
+            exit ${ERROR_BAD_MOUNTPOINT}
+        fi
+    fi
+
+    mountInfo=$(mount | grep -i "${mountPoint}")
+    deviceInfo=$(mount | grep -i "${device}")
+    if [ "$(awk '{print $1}' <<<${mountInfo})" != "${device}" ]
+    then
+        if (( $(wc -w <<<${deviceInfo}) > 0 ))
+        then
+            #we could umount and then mount it in the right place
+            #but that could have many problems, leaset of which is
+            #files may already be open at the incorrect mountpoint
+            errorText "[${device}] is mounted at [$(awk '{print $3}' <<<${deviceInfo})] instead of [${mountPoint}], please correct this first"
+            exit ${ERROR_MIS_MOUNTED}
+        else
+            #This should never really happen as we try and mount it above
+            #so this time don;t retry mounting, there is obviously 
+            #something very wrong
+            errorText "[${device}] is not mounted at [${mountPoint}].  mount returned: [${mountInfo}]"
+            listDir "${device}"
+            listDir "${mountPoint}"
+            exit ${ERROR_DEVICE_NOT_MOUNTED}
+        fi
+    fi
+}
+
+function copyFile()
+{
+    local sourceFile="${1}"
+    local destinationFile="${2}"
+    local copyDirContents="${3}"
+    local owner="${4}"
+    local RSYNC_CMD="sudo rsync -ahHAEX --whole-file --ignore-times --no-inc-recursive --info=progress2"
+
+    debugEcho "Source: [${sourceFile}] Dest: [${destinationFile}] DirMode: [${copyDirContents}] True: [${TRUE}] False: [${FALSE}]"
+    if ! $(sudo test -e "${OLD_FILE_DIR_LOCAL}")
+    then
+        makeDirectory "${OLD_FILE_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+    fi
+
+    # doing this as sudo as if a directory under the file is only readable as root it will fail, grrr
+    if $(sudo test -e "${sourceFile}")
+    then
+        debugEcho "Source Exists"
+        if [ "${copyDirContents}" == "${TRUE}" ] && $(sudo test -d "${destinationFile}")
+        then
+            #using rsync now, which automatically creates the directory
+            : #makeDirectory "${destinationFile}" "${owner}"
+        fi
+        if $(sudo test -e "$(dirname ${destinationFile})")
+        then
+            debugEcho "Destination Parent Directory Exists"
+            if [ "${copyDirContents}" == "${TRUE}" ]
+            then
+                if $(sudo test -d "$(dirname ${destinationFile})") && $(sudo test -d "${sourceFile}")
+                then
+                    #we're copying from one directory to another,
+                    #the destination should exists (erm not now we're using rsync, but it doens;t matter)
+                    #All files with the same name from the source will
+                    #overwrite the destination, no backups made
+                    #pv -F "%N %b %t Cur%r Avg%a %p ETA:%e" -s $(du -sb "${directory}" | awk '{print $1}')
+                    #sudo cp -f -p -r -T "${sourceFile}" "${destinationFile}"
+                    infoText "Copying Directory [${sourceFile}] -> [${destinationFile}]" ${INFO_TEXT_MISC}
+                    #rsync doesn't copy into the destination directory, but into the parent directory, creating the
+                    #destination if required (hence dirname usage here)
+                    ${RSYNC_CMD} "${sourceFile}" "$(dirname ${destinationFile})"
+                    retVal=$?
+                    if [ "${retVal}" != "0" ]
+                    then
+                        warnText "Copying [${sourceFile}/*] -> [${destinationFile}/]. rsync returned error code [${retVal}]"
+                        listDir "${sourceFile}"
+                        listDir "${destinationFile}"
+                        #exit ${ERROR_COPYING_FILE}
+                    fi
+                    sudo chown -R ${owner} "${destinationFile}"
+                else
+                    errorText "Directory contents copy mode selected, but either [${sourceFile}] or [$(dirname ${destinationFile})] or both are not directories"
+                    listDir "${sourceFile}"
+                    listDir "$(dirname ${destinationFile})"
+                    exit ${ERROR_WRONG_COPY_MODE}
+                fi
+            else
+                #Copying a file and destination parent exists
+                if $(sudo test -f "${sourceFile}")
+                then
+                    #I suppose we could be copying links or device files
+                    #but this function is only for copying files or directories
+                    #it's already complicated enough
+                    if $(sudo test -e "${destinationFile}")
+                    then
+                        #Quite often the destination will exist and will be an
+                        #important system file, just mv it instead of deleting
+                        #in case it's required for future reference
+                        if $(sudo test -d "${destinationFile}")
+                        then
+                            warnText "[${destinationFile}] exists and is a directory, not a file (we're in file copy mode).  Will move the directory out of the way and copy the file over, but you probably don't want this"
+                        fi
+                        local oldDestinationFile="${OLD_FILE_DIR_LOCAL}${destinationFile}${OLD_FILE_SUFFIX}"
+                        if [[ "${oldDestinationFile}" != *"${OLD_FILE_DIR_LOCAL}"* ]]
+                        then
+                            makeDirectory "$(dirname ${oldDestinationFile})" "${owner}"
+                            warnText "[${destinationFile}] exists, moving it to [${oldDestinationFile}]"
+                            sudo mv "${destinationFile}" "${oldDestinationFile}"
+                            retVal=$?
+                            if [ "${retVal}" != "0" ]
+                            then
+                                errorText "Moving old directory/file [${destinationFile}] -> [${oldDestinationFile}]. mv returned error code [${retVal}]"
+                                listDir "${destinationFile}"
+                                listDir "${oldDestinationFile}"
+                                exit ${ERROR_MOVING_FILE}
+                            fi
+                        fi
+                        #After all that, don't forget to actually do the copy
+                        sudo cp -f -p "${sourceFile}" "${destinationFile}"
+                        retVal=$?
+                        if [ "${retVal}" != "0" ]
+                        then
+                            errorText "Copying [${sourceFile}] -> [${destinationFile}]. cp returned error code [${retVal}]"
+                            listDir "${sourceFile}"
+                            listDir "${destinationFile}"
+                            exit ${ERROR_COPYING_FILE}
+                        fi
+                        sudo chown ${owner} "${destinationFile}"
+                    else
+                        #destination doesn't exist and in file copy mode, just copy it over
+                        if ! $(sudo test -e "$(dirname "${destinationFile}")")
+                        then
+                            #parent directory doesn;t exit yet, create it
+                            makeDirectory "$(dirname "${destinationFile}")"
+                        fi
+                        sudo cp -f -p "${sourceFile}" "${destinationFile}"
+                        retVal=$?
+                        if [ "${retVal}" != "0" ]
+                        then
+                            errorText "Copying [${sourceFile}] -> [${destinationFile}]. cp returned error code [${retVal}]"
+                            listDir "${sourceFile}"
+                            listDir "${destinationFile}"
+                            exit ${ERROR_COPYING_FILE}
+                        fi
+                        sudo chown ${owner} "${destinationFile}"
+                    fi
+                elif $(sudo test -d "${sourceFile}")
+                then
+                    #source file is a directory in file copy mode
+                    errorText "[${sourceFile}] is a directory, and file copy mode was selected"
+                    listDir "${sourceFile}"
+                    exit ${ERROR_WRONG_COPY_MODE}
+                else
+                    #source file exists, but isn't a file or a directory
+                    #see above about not supporting special files in this function
+                    errorText "[${sourceFile}] is not a file or a directory. Not continuing in case we break something"
+                    listDir "${sourceFile}"
+                    exit ${ERROR_BAD_SOURCE}
+                fi
+            fi
+        else
+            #destination does not exist
+            if $(sudo test -f "${sourceFile}") && [ "${copyDirContents}" == "${FALSE}" ]
+            then
+                #We're okay, source is a file (in file copy mode) and no destination
+                #exists, just copy it over
+                if ! $(sudo test -d $(dirname "${destinationFile}"))
+                then
+                    makeDirectory "$(dirname ${destinationFile})" "${owner}"
+                fi
+                sudo cp -f -p "${sourceFile}" "${destinationFile}"
+                retVal=$?
+                if [ "${retVal}" != "0" ]
+                then
+                    errorText "Copying [${sourceFile}] -> [${destinationFile}]. cp returned error code [${retVal}]"
+                    listDir "${sourceFile}"
+                    listDir "${destinationFile}"
+                    exit ${ERROR_COPYING_FILE}
+                fi
+                sudo chown ${owner} "${destinationFile}"
+            elif $(sudo test -d "${sourceFile}") && [ "${copyDirContents}" == "${FALSE}" ]
+            then
+                #source file is a directory in file copy mode
+                errorText "[${sourceFile}] is a directory, and file copy mode was selected"
+                listDir "${sourceFile}"
+                exit ${ERROR_WRONG_COPY_MODE}
+            elif $(sudo test -f "${sourceFile}") && [ "${copyDirContents}" == "${TRUE}" ]
+            then
+                #source file is a file in directory copy mode
+                errorText "[${sourceFile}] is a file, and directory copy mode was selected"
+                listDir "${sourceFile}"
+                exit ${ERROR_WRONG_COPY_MODE}
+            elif $(sudo test -d "${sourceFile}") && [ "${copyDirContents}" == "${TRUE}" ]
+            then
+                #good to go, source is a directory but the destination doesn;t exist yet
+                makeDirectory "$(dirname ${destinationFile})" "${owner}"
+
+                infoText "Copying Directory [${sourceFile}] -> [${destinationFile}]" ${INFO_TEXT_MISC}
+                #rsync doesn't copy into the destination directory, but into the parent directory, creating the
+                #destination if required (hence dirname usage here)
+                ${RSYNC_CMD} "${sourceFile}" "$(dirname ${destinationFile})"
+                retVal=$?
+                if [ "${retVal}" != "0" ]
+                then
+                    warnText "Copying [${sourceFile}/*] -> [${destinationFile}/]. rsync returned error code [${retVal}]"
+                    listDir "${sourceFile}"
+                    listDir "${destinationFile}"
+                    #exit ${ERROR_COPYING_FILE}
+                fi
+                sudo chown -R ${owner} "${destinationFile}"
+            else
+                #source file exists, but isn't a file or a directory
+                #see above about not supporting special files in this function
+                errorText "[${sourceFile}] is not a file or a directory. Not continuing in case we break something"
+                listDir "${sourceFile}"
+                exit ${ERROR_BAD_SOURCE}
+            fi
+        fi
+    else
+        errorText "[${sourceFile}] does not exist"
+        exit ${ERROR_FILE_MISSING}
+    fi
+}
+
+function linkFile()
+{
+    local destinationLink="${1}"
+    local sourceFile="${2}"
+
+    if ! $(sudo test -e "${OLD_FILE_DIR_LOCAL}")
+    then
+        makeDirectory "${OLD_FILE_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+    fi
+    if $(sudo test -e "${destinationLink}")
+    then
+        local oldDestinationLink="${OLD_FILE_DIR_LOCAL}${destinationLink}${OLD_FILE_SUFFIX}"
+        makeDirectory "$(dirname ${oldDestinationLink})" "${USER_NAME}:${GROUP_NAME}"
+        warnText "[${destinationLink}] exists, moving it to [${oldDestinationLink}]"
+        sudo mv -fT "${destinationLink}" "${oldDestinationLink}"
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Moving old link/file/dir [${destinationLink}] -> [${oldDestinationLink}]. mv returned error code [${retVal}]"
+            listDir "${destinationLink}"
+            listDir "${oldDestinationLink}"
+            exit ${ERROR_MOVING_FILE}
+        fi
+    fi
+
+    if $(sudo test -e "${sourceFile}")
+    then
+        sudo ln -s "${sourceFile}" "${destinationLink}"
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Linking [${sourceFile}] -> [${destinationLink}]. ln returned error code [${retVal}]"
+            listDir "${sourceFile}"
+            listDir "${destinationLink}"
+            exit ${ERROR_LINKING_FILE}
+        fi
+    else
+        errorText "[${sourceFile}] does not exist"
+        exit ${ERROR_FILE_MISSING}
+    fi
+}
+
+function appendToFile()
+{
+    local filename="${1}"
+    local text="${2}"
+
+    #check if text is already present in file
+#    if [ "$(grep -q -l "${text}" "${filename}")" != "${filename}" ] no idiea why this doesn;t work
+    if [[ $(cat "${filename}") = *"${text}"* ]];
+    then
+        warnText "Not appending as text already in ${filename}"
+    else
+        #append to file
+        echo -e "${text}" | sudo tee -a "${filename}"
+    fi
+}
+
+function sudoCheck()
+{
+    if (( $(sudo id -u) != 0 ))
+    then
+        errorText "Unable to acheive sudo control.  Please run this script either as an admin user, a user with sudo powers or just with sudo (i.e sudo $0).  As this script has to change system files to set up your system"
+        exit ${ERROR_NO_SUDO}
+    fi
+}
+
+function mountDrive()
+{
+    local drive=""
+    local mountPoint=""
+    local owner="${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    local mountOptions="defaults"
+    local fileSystem=""
+    local sdDrive=""
+
+    if (( $# > 3 ))
+    then
+        drive=${1}
+        mountPoint=${2}
+        mountOptions=${3}
+        fileSystem="-t ${4}"
+        owner=${5}
+    elif (( $# > 2 ))
+    then
+        drive=${1}
+        mountPoint=${2}
+        owner=${3}
+    else
+        drive=${1}
+        mountPoint=${2}
+    fi
+
+    #I tend to use /dev/disk/by-id to get drives
+    #so make sure they are always of the form /dev/sdX
+    #apart from for md RAID drives, in fact, just if
+    #device doesn't start /dev/
+    if [[ "${drive}" != "/dev/"* ]]
+    then
+        sdDrive="/dev/$(ls -al ${drive} | awk '{print $NF}' | awk -F/ '{print $NF}')"
+    else
+        sdDrive="${drive}"
+    fi
+
+
+    if ! $(sudo test -e "${mountPoint}")
+    then
+        makeDirectory "${mountPoint}" "${owner}"
+    fi
+
+    if (( $(mount | grep "${sdDrive}" | wc -l) == 0 )) && (( $(mount | grep "${mountPoint}" | wc -l) == 0 ))
+    then
+        #drive isn't mounted, mount it
+        cmd="sudo mount -o ${mountOptions} ${fileSystem} ${sdDrive} ${mountPoint}"
+        debugEcho "${cmd}"
+        eval ${cmd}
+        retVal=$?
+        if [ "${retVal}" != "0" ]
+        then
+            errorText "Unable to mount [${drive}] (${sdDrive}) at [${mountPoint}] using the command [${cmd}] (mount returned error code: [${retVal}])"
+            exit ${ERROR_MOUNT_FAILED}
+        fi
+    else
+        #drive is mounted, make sure it's the right one
+        if [ "$(mount | grep ${sdDrive} | awk '{print $3}')" != "${mountPoint}" ]
+        then
+            #drive is mounted at the wrong place, don't unmount it, it may be import, just error out
+            errorText "Drive [${drive}] (${sdDrive}) is mounted at [$(mount | grep ${sdDrive} | awk '{print $3}')] instead of the expect location of [${mountPoint}]"
+            exit ${ERROR_MOUNTED_WRONG_LOCATION}
+        elif [ "$(mount | grep ${mountPoint} | awk '{print $1}')" != "${sdDrive}" ]
+        then
+            #the wrong drive is mounted here, we can;t unmount it in case it's important
+            errorText "Another drive [$(mount | grep ${mountPoint} | awk '{print $1}')] is mounted at [${mountPoint}] instead of the expect drive [${drive}] (${sdDrive})"
+            exit ${ERROR_WRONG_DEVICE_MOUNTED}
+        elif [ "$(mount | grep ${sdDrive} | awk '{print $3}')" == "${mountPoint}" ]
+        then
+            #yey, already mounted, and the right drive
+            infoText "Drive [${drive}] (${sdDrive}) is already mounted at [${mountPoint}]. No need to mount it." ${INFO_TEXT_MISC_NO_DOTS}
+        else
+            #HMM this should not be possible, error out
+            errorText "An unknown error occured when trying to mount drive [${drive}] (${sdDrive}) at [${mountPoint}].  Drive is mounted, but unsure where"
+            exit ${ERROR_UNKNOWN_MOUNT_ERROR}
+        fi
+    fi
+}
+
+function restartServices()
+{
+    for service in $(sudo systemctl | grep active | grep .service | grep -v "@" | awk '{print $1}') wsdd grafana-server    plexmediaserver
+    do
+        shopt -s nocasematch
+        if [[ ! "${service}" =~ ^(${SERVICES_TO_NOT_RESTART})$ ]]
+        then
+            infoText "Restarting [${service}]" ${INFO_TEXT_MISC}
+            #sudo systemctl restart ${service}
+        else
+            warnText "Deliberately Not Restarting [${service}] (This is not an error)"
+        fi
+    done
+}
+
+function getLatestGitVersionTag()
+{
+    local repoOwner=${1}
+    local repoName=${2}
+    local version
+
+    version=$(curl -sX GET "https://api.github.com/repos/${repoOwner}/${repoName}/releases/latest" \
+          | awk '/tag_name/{print $4}' FS='["]')
+    version=${version#v}
+    echo "${version}"
+}
+
+function download()
+{
+    local url=${1}
+    local saveTo=${2}
+    local temp=$(mktemp -d)
+    local user=$(stat -c %U "$(dirname ${saveTo})")
+    local group=$(stat -c %G "$(dirname ${saveTo})")
+
+    curl -fSL "${url}" --output "${temp}/$(basename ${saveTo})"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        errorText "Unable to download [${url}]. curl returned error code: [${retVal}]]"
+        exit ${ERROR_DOWNLOAD_FAILED}
+    fi
+    copyFile "${temp}/$(basename ${saveTo})" "${saveTo}" "${FALSE}" "${user}:${group}"
+    deleteFile "${temp}"
+}
+
+function copyOverFiles()
+{
+    local -n arrayOfFilesToCopy="${1}"
+    local whereFrom="${2}"
+    local whereTo="${3}"
+    local owner="${4}"
+
+	if (( ${#arrayOfFilesToCopy[@]}  > 0 ))
+	then
+        #assume we want the directory we are copying files into to exist
+        if ! $(sudo test -e "${whereTo}")
+        then
+            makeDirectory "${whereTo}" "${owner}"
+        fi
+	    for file in "${arrayOfFilesToCopy[@]}"
+	    do
+            #some files are within directories, so make them if they don't exists
+            if ! $(sudo test -e "$(dirname "${whereTo}/${file}")")
+            then
+                makeDirectory "$(dirname "${whereTo}/${file}")" "${owner}"
+            fi
+	        copyFile "${whereFrom}/${file}" "${whereTo}/${file}" "${FALSE}" "${owner}"
+	    done
+	fi
+}
+
+function copyOverDirs()
+{
+    local -n arrayOfDirsToCopy="${1}"
+    local whereFrom="${2}"
+    local whereTo="${3}"
+    local owner="${4}"
+
+    #Thankfully under copy directory mode copyFiles will make any folders that do not exist
+	if (( ${#arrayOfDirsToCopy[@]}  > 0 ))
+	then
+	    for dir in "${arrayOfDirsToCopy[@]}"
+	    do
+	        copyFile "${whereFrom}/${dir}" "${whereTo}/${dir}" "${TRUE}" "${owner}"
+	    done
+	fi
+}
+
+###this is very unecessary, just showing off
+function copyStuff()
+{
+    local keyword="${1}"
+    local owner="${2}"
+    local filesArrayName="${keyword}_FILES_TO_COPY"
+    #infoText "filesArrayName: [${filesArrayName}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local -n arrayOfFiles="${filesArrayName}"
+    #infoText "arrayOfFiles[${#arrayOfFiles[@]}]: [${arrayOfFiles[*]}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local dirsArrayName="${keyword}_DIRS_TO_COPY"
+    #infoText "dirsArrayName: [${dirsArrayName}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local -n arrayOfDirs="${dirsArrayName}"
+    #infoText "arrayOfDirs[${#arrayOfDirs[@]}]: [${arrayOfDirs[*]}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local whereFromName="${keyword}_DIR_REMOTE"
+    #infoText "whereFromName: [${whereFromName}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local whereFrom="${!whereFromName}"
+    #infoText "whereFrom: [${whereFrom}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local whereToName="${keyword}_DIR_LOCAL"
+    #infoText "whereToName: [${whereToName}]" ${INFO_TEXT_MISC_NO_DOTS}
+    local whereTo="${!whereToName}"
+    #infoText "whereTo: [${whereTo}]" ${INFO_TEXT_MISC_NO_DOTS}
+
+    copyOverDirs "arrayOfDirs" "${whereFrom}" "${whereTo}" "${owner}"
+    copyOverFiles "arrayOfFiles" "${whereFrom}" "${whereTo}" "${owner}"
+}
+
+
+function aptInstall()
+{
+    local packageList="${1}"
+
+    infoText "${packageList}" ${INFO_TEXT_INSTALL}
+    runCommand "${ROOT_USER_NAME}" "DEBIAN_FRONTEND=noninteractive apt install ${packageList} -y"
+}
+
+
+function aptUpdate()
+{
+    infoText "Updating Repository Database" ${INFO_TEXT_MISC}
+    runCommand "${ROOT_USER_NAME}" "apt update"
+}
+
+
+function aptUpgrade()
+{
+    aptUpdate
+    infoText "Upgrading Already Installed Packages" ${INFO_TEXT_MISC}
+    runCommand "${ROOT_USER_NAME}" "DEBIAN_FRONTEND=noninteractive apt upgrade -y"
+}
+
+
+function aptRemove()
+{
+    local packageList="${1}"
+
+    infoText "Removing ${packageList}" ${INFO_TEXT_MISC}
+    runCommand "${ROOT_USER_NAME}" "DEBIAN_FRONTEND=noninteractive apt remove ${packageList} -y"
+    runCommand "${ROOT_USER_NAME}" "DEBIAN_FRONTEND=noninteractive apt autoremove -y"
+}
+
+function spinner()
+{
+    local info="${1}"
+    local pid=${!}
+    local delay=0.75
+    local spinstr='|/-\'
+
+    while kill -0 ${pid} 2> /dev/null
+    do
+        local temp=${spinstr#?}
+        printf " [%c]  ${info}" "${spinstr}" > /dev/tty
+        local spinstr=${temp}${spinstr%"${temp}"}
+        sleep ${delay}
+#        local reset="\b\b\b\b\b\b"
+#        for ((i=1; i<=$(echo ${info} | wc -c); i++))
+#        do
+#            reset="${reset}\b"
+#        done
+#        printf "${reset}" > /dev/tty
+        printf "\r%b" "${CLEAR_LINE}"
+    done
+#    printf "    \b\b\b\b" > /dev/tty
+    printf "\r%b" "${CLEAR_LINE}"
+}
+
+function cleanMusic()
+{
+    OFS=${IFS}
+    IFS=$'\n'
+    local -i detected=0
+    local -r MUSIC_DIRECTORY="/mnt/ext4-data/Music/Music"
+
+    printf 'Deleting *.nzb, desktop.ini and thumbs.db files...\n'
+    sudo find "${MUSIC_DIRECTORY}" -iname "*.nzb" -delete -o -iname "desktop.ini" -delete -o -iname "thumbs.db" -delete
+    printf 'Deleting Empty Folders and Files...\n'
+    sudo find "${MUSIC_DIRECTORY}" -depth -empty -delete
+
+    printf 'Scanning for sub-directories...\n'
+    local -a subdirs=( $(find "${MUSIC_DIRECTORY}" -depth -type d -print) )
+#& spinner "Scanning for sub-directories..."
+    local -i size=${#subdirs[@]}
+#        printf 'size: %d\n' ${size}
+    local -i last=$(( ${size}-1 ))
+#        printf 'last: %d\n' ${last}
+    printf 'Scanning each sub-directory...\n'
+    for (( i=${last}; i>=0; i-- ))
+    do
+        local -i screenWidth=$(tput cols) #do it evey loop as user may adjust terminal window
+        local -i crop=$((${screenWidth} - 16)) #16= Scanning []... plus one more for luck
+        local directory="${subdirs[i]}"
+        printf 'Scanning [%s]...' "${directory:0:${crop}}"
+        local -i files=$(find "${directory}" -maxdepth 1 -type f | wc -l)
+        local -i nonaudio=$(find "${directory}" -maxdepth 1 -type f -not -iname "*.mp3" \
+                                                               -and -not -iname "*.m4a" \
+                                                               -and -not -iname "*.m4b" \
+                                                               -and -not -iname "*.wav" \
+                                                               -and -not -iname "*.flac" \
+                                                               -and -not -iname "*.m4v" \
+                                                               -and -not -iname "*.m3u" \
+                                                               -and -not -iname "*.mkv" \
+                                                               -and -not -iname "*.rar" \
+                                                               -and -not -iname "*.zip" \
+        | wc -l)
+#                                                               -and -not -iname "*.txt" \
+        local -i directories=$(find "${directory}" -maxdepth 1 -type d | wc -l)
+        printf '\r%b' "${CLEAR_LINE}"
+        if (( ${files} == ${nonaudio} && ${files} > 0 && ${directories} == 1 ))
+        then
+            let detected++
+            printf '%d: [%s] [%d] [%d] [%d]\n' ${i} "${directory}" ${files} ${nonaudio} ${directories}
+#            ls -al --group-directories-first --classify -p "${directory}"
+            sudo rm -rf "${directory}"
+        fi
+    done
+    printf 'size: %d\n0:[%s] 1:[%s] %d:[%s]\ndetected: [%d]\n' ${size} "${subdirs[0]}" "${subdirs[1]}" ${last} "${subdirs[${last}]}" ${detected}
+    IFS=${OFS}
+    printf 'Deleting Empty Folders and Files...\n'
+    sudo find "${MUSIC_DIRECTORY}" -depth -empty -delete
+}

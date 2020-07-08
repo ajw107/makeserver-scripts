@@ -1,0 +1,1019 @@
+#!/usr/bin/env bash
+#####TODO
+#-install credstash, aws and download latest version of terraform
+#-copy over aws credentials
+#-use credstash to store passwords,user info, etc
+#-see if credstash has an equivalent for sensitive files (user.txt and smb.credentials, etc)
+#-Check if pushover has it's env set to bash at the top of the file
+#-You download the APT keys, and then copy over /etc/apt/trusted.gpg*, do this the other way round
+#-upload everything to cloud storage so we can get rid of sdb
+#-figure out a quick way of accessing cloud storage from a virgin server install
+#-create a script which backs up config files,etc from a running ubutu to remote/cloud so that when m a new server it always has
+# the latest versions without having to copy them over manually first
+#-do I need oomox?
+#-something else to install, but can;t remember - probably elasticsearch
+#-*add tim as a user
+#-*install filezilla sudo add-apt-repository ppa:sicklylife/filezilla
+#-*install musicbrainz sudo add-apt-repository ppa:musicbrainz-developers/stable
+#-install sudo apt install libgstreamer1.0-0 libgstreamer1.0-dev libgstreamer-plugins-bad1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-plugins-bad1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-good1.0-0 libgstreamer-plugins-good1.0-dev meson ninja-build gstreamer1.0-python3-plugin-loader gstreamer1.0-plugins-base  gstreamer1.0-plugins-ugly gstreamer1.0-plugins-bad gstreamer1.0-plugins-good cmake libfftw3-3 libfftw3-dev vorbisgain bs1770gain mp3gain flac wavpack
+#-build moodbar git clone git@github.com:exaile/moodbar.git
+#-*install mp3gain sudo add-apt-repository ppa:flexiondotorg/audio
+#-install makemkv
+#-make constants able to be defined via command line or input file (could just source them)
+#*-copy over cron jobs
+#-check return values of git clone, etc
+#*-smbpasswd is not working
+#-limit the amount of apt updates happening, one is enough
+#*-check if apt key is present before adding it 
+#  **Not viable as apart from tor (which has the fingerprint in the url) all others would
+#    have to be downloaded in anycase, and then generate a fingerprint to check against
+#*-copy over make scripts to /home/alex
+#*-copy over bin folder
+#*-copy over .bashrc and .profile
+#*-copy over fstab.pool fstab.raid wsdd-override.temp iscsid.conf.temp sudoers.temp (and put on gdrive)
+#*-copy over folder .config .byobu .docker .get_iplayer .git .gitconfig .local .ssh .xpra
+# docker-compose-scripts (and put on gdrive)
+#*-figure out a better way of doing USER_HOME permissions other than just chown -R <user>:<group> ${USER_HOME}
+# (do we need to do this, as we use -p in copy) also things like .get-iplayer have different owners
+#*-get USER_NAME and GROUP_NAME from users.txt file or when creating the users somehow
+# (maybe newusers returns the name of the user added?
+#*-other dir in /etc need to copied over, such as xpra, bash-completion, etc
+#*-change sudoCheck so that it checks if we have the ability to use sudo, rather than if it's been used to call the script
+#*-when adding user, need to make sure it's part of the adm and sudo group too
+#*-copy over my version of ll
+#*-plexserver and config files (not just ones on raid)
+#*-ffmpeg
+#*-edit .bashrc and .profile
+#-*firemotd
+#-*udev and systemd rules
+#-*node scripts
+#*-install other programs such as mutt, get-iplayer, tor, etc
+#-EVERYTHING
+#*-grab dockercompose and install (also bash-completeion and edit that
+#*-/root and ${dockeruser_home_dir} directory needs looking at
+#*-splexmediaserver and ffmpeg are not installing
+#*-wait until after apt install before copying over files
+#*-copy over mysql databases (var/lib/mysql
+#*-look at /var/lib for other stuff
+#*-seperate out everything into functions so main is just an easily read list of commands
+#*-also create a function to create an info statement on each function start to say what is ebing done
+#-in here and commonfunction define functions (find out how to do it properly)
+#*-what is send e-mail and credentialshelper in git config
+#-upload all files to cloud and downloadon install instead of copying from sdb
+#*-install powerline (from my repo) and copy over config files
+#*-the inital copy of system files- should we just do this in the main copies?
+#*-setup esmtp
+#*-set up decred and ethereum wallets (install go too)
+#*-Do we need to copy the makeServer scripts over seperately now we're copy over the whole bin directory?
+#  We don;t, no idea why I've left those defines there...
+#-Automatically accept the RSA key unknown error during first git download
+#******LEAVE OUT INIT AND INIT.D,BUT BE AWARE IF THINGS GO GAGA THIS MAYBE WHY
+
+######Import common functions and constants
+commFuncFile="/mnt/sdb/${HOME}/bin/commonfunctions"
+if $(sudo test -e "${commFuncFile}")
+then
+    echo "Loading ${commFuncFile}..."
+    . "${commFuncFile}"
+fi
+
+######Initialise Variables
+#grab sensitive values
+secretsFile="${HOME}/secrets/$(basename "${BASH_SOURCE}")_secrets"
+if $(sudo test -e "${secretsFile}")
+then
+    echo "Loading ${secretsFile}..."
+    . "${secretsFile}"
+fi
+
+declare -a -r MAKESERVER_FILES_TO_COPY=( "fstab.pool" "fstab.raid" "wsdd-override.temp" "iscsid.conf.temp" "sudoers.temp" "users.txt" "credentials.txt" ) #just filenames relative to ${USER_HOME_DIR_REMOTE}
+declare -a -r USER_HOME_FILES_TO_COPY=( ".bash_aliases" ".bash_history" ".esmtprc" "FileZilla-Client.ico" ) #just filenames relative to ${USER_HOME_DIR_REMOTE}
+declare -a -r USER_HOME_DIRS_TO_COPY=( ".config" ".byobu" ".dcrctl" ".dcrd" ".dcrticketbuyer" ".dcrwallet" ".docker" ".get_iplayer" ".git" ".gnupg" ".local" ".xpra" "docker-compose-scripts" "bin" ".MakeMKV" ) #just directory names relative to ${USER_HOME_DIR_REMOTE}
+declare -a -r ROOT_HOME_FILES_TO_COPY=( ".bashrc" ) #just filenames relative to ${ROOT_HOME_DIR_REMOTE}
+declare -a -r ROOT_HOME_DIRS_TO_COPY=(  ) #just directory names relative to ${ROOT_HOME_DIR_REMOTE}
+declare -a -r DOCKERUSER_HOME_FILES_TO_COPY=( ".bashrc" ) #just filenames relative to ${DOCKERUSER_HOME_DIR_REMOTE}
+declare -a -r DOCKERUSER_HOME_DIRS_TO_COPY=( ".config" ) #just directory names relative to ${DOCKERUSER_HOME_DIR_REMOTE}
+#declare -r TIM_USER_NAME="tim"
+#declare -r TIM_HOME_DIR_LOCAL="/home/tim"
+#declare -r TIM_HOME_DIR_REMOTE="${REMOTE_MOUNTPOINT}${TIM_HOME_DIR_LOCAL}"
+#declare -a -r TIM_HOME_FILES_TO_COPY=(  ) #just filenames relative to ${TIM_HOME_DIR_REMOTE}
+#declare -a -r TIM_HOME_DIRS_TO_COPY=( ".ssh" ) #just directory names relative to ${TIM_HOME_DIR_REMOTE}
+declare -r SMARTBULBS_USER_NAME="smartbulbs"
+declare -r SMARTBULBS_HOME_DIR_LOCAL="/home/smartbulbs"
+declare -r SMARTBULBS_HOME_DIR_REMOTE="${REMOTE_MOUNTPOINT}${SMARTBULBS_HOME_DIR_LOCAL}"
+declare -a -r SMARTBULBS_HOME_FILES_TO_COPY=( "characteristics.json" "deviceProperties.json" "properties.json" ) #just filenames relative to ${SMARTBULBS_HOME_DIR_REMOTE}
+declare -a -r SMARTBULBS_HOME_DIRS_TO_COPY=(  ) #just directory names relative to ${SMARTBULBS_HOME_DIR_REMOTE}
+declare -a -r ETC_FILES_TO_COPY=( "bash_completion" "bash.bashrc" "nanorc" "Muttrc" "aliases" "aliases.db" "default/plexmediaserver" "default/smartmontools" "default/ssh" "default/tftpd-hpa" "exports" "hostname" "hosts" "mailname" "ntp.conf" "smartd.conf" "swapspace.conf" "systemd/system/apt-update.service" "systemd/system/apt-update.timer" "systemd/system/smartbulbserver.service" "systemd/system/tplinkSmartAppServer.service" "udev/rules.d/40-uinput.rules" "udev/rules.d/70-persistent-net.rules" "udev/rules.d/99-usb-serial.rules" "watchdog.conf" "default/watchdog" "systemd/system/docker.service.d/override.conf" ) #just filenames relative to ${ETC_DIR_REMOTE}
+### "logrotate.conf" "systemd/system/deluged.service" "systemd/system/delugeweb.service" "modprobe.d/watchdog.conf" "modules-load.d/watchdog.conf" "initramfs-tools/modules"
+declare -a -r ETC_DIRS_TO_COPY=( "bash_completion.d" "byobu" "Muttrc.d" "xpra" "get_iplayer" "grafana" "influxdb" "kapacitor" "mysql" "postfix" "pushover" "ssh" "systemd/network" "systemd/system/docker.service.d" "telegraf" "webmin" ) #just directory names relative to ${ETC_DIR_REMOTE}
+### "logrotate.d"
+declare -a -r VAR_FILES_TO_COPY=( "spool/cron/crontabs/root" "spool/cron/crontabs/alex" ) #just filenames relative to ${VAR_DIR_REMOTE}
+declare -a -r VAR_DIRS_TO_COPY=( "lib/mysql" "lib/chronograf" "lib/kapacitor" "lib/smartmontools" "spool/postfix" ) #just directory names relative to ${VAR_DIR_REMOTE}
+declare -a -r OPT_FILES_TO_COPY=(  ) #just filenames relative to ${OPT_DIR_REMOTE}
+declare -a -r OPT_DIRS_TO_COPY=( "node" "EthereumWallet" "Mist" ) #just directory names relative to ${OPT_DIR_REMOTE}
+declare -r TIMEZONE="Europe/London"
+declare -r SYSTEM_BASHRC_LOCAL="${ETC_DIR_LOCAL}/bash.bashrc"
+declare -r MAKESERVER_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/makeServer"
+declare -r MAKESERVER_SCRIPT_LOCAL="${USER_BIN_DIR_LOCAL}/makeServer"
+declare -r MAKEPOOL_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/makePool"
+declare -r MAKEPOOL_SCRIPT_LOCAL="${USER_BIN_DIR_LOCAL}/makePool"
+declare -r MAKERAID_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/makeRaid"
+declare -r MAKERAID_SCRIPT_LOCAL="${USER_BIN_DIR_LOCAL}/makeRaid"
+declare -r MAKEISCSI_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/makeIscsi"
+declare -r MAKEISCSI_SCRIPT_LOCAL="${USER_BIN_DIR_LOCAL}/makeIscsi"
+declare -r COMMON_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/commonfunctions"
+declare -r COMMON_SCRIPT_LOCAL="${USER_BIN_DIR_LOCAL}/commonfunctions"
+declare -r COPYTOPOOL_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/copyToPool"
+declare -r COPYTOPOOL_SCRIPT_LOCAL="${USER_BIN_DIR_LOCAL}/copyToPool"
+#declare -r NEW_USERS_FILE_LOCAL="${USER_HOME_DIR_LOCAL}/users.txt"
+#declare -r SAMBA_CREDENTIALS_FILE_LOCAL="${USER_HOME_DIR_LOCAL}/credentials.txt"
+declare -r SUDOERS_REMOTE="${USER_HOME_DIR_REMOTE}/sudoers.temp"
+declare -r USER_BASHRC_REMOTE="${USER_HOME_DIR_REMOTE}/bashrc.temp"
+declare -r USER_BASHRC_LOCAL="${USER_HOME_DIR_LOCAL}/.bashrc"
+declare -r USER_PROFILE_REMOTE="${USER_HOME_DIR_REMOTE}/profile.temp"
+declare -r USER_PROFILE_LOCAL="${USER_HOME_DIR_LOCAL}/.profile"
+declare -r WSDD_SYSTEMD_OVERRIDE_LOCAL="${ETC_DIR_LOCAL}/systemd/system/wsdd.service.d/override.conf"
+declare -r WSDD_SYSTEMD_OVERRIDE_REMOTE="${USER_HOME_DIR_REMOTE}/wsdd-override.temp"
+declare -r FIREMOTD_GIT_URL="git@github.com:OutsideIT/FireMotD.git"
+declare -r FIREMOTD_DIR_LOCAL="${GIT_DIR_LOCAL}/firemotd"
+declare -r DOCKER_COMPOSE_GIT_URL="https://github.com/docker/compose/releases/download/$(getLatestGitVersionTag docker compose)/docker-compose-$(uname -s)-$(uname -m)"
+declare -r DOCKER_COMPOSE_LOCAL="/usr/local/bin/docker-compose"
+declare -r DOCKER_COMPOSE_BASH_COMPLETION_URL="https://github.com/docker/compose/raw/master/contrib/completion/bash/docker-compose"
+declare -r
+DOCKER_COMPOSE_BASH_COMPLETION_SED="\$s/\$/ dc/"
+declare -r DOCKER_COMPOSE_BASH_COMPLETION_TEMP="/tmp/docker-compose-bash-completion"
+declare -r DOCKER_COMPOSE_BASH_COMPLETION_LOCAL="${BASH_COMPLETION_LOCAL}/docker-compose"
+declare -r PUSHOVER_BASH_GIT_URL="git@github.com:akusei/pushover-bash.git"
+declare -r PUSHOVER_BASH_DIR_LOCAL="${GIT_DIR_LOCAL}/pushover-bash"
+declare -r PLEX_SERVER_URL="https://downloads.plex.tv/plex-media-server-new/1.19.5.3035-864bbcbb7/debian/plexmediaserver_1.19.5.3035-864bbcbb7_amd64.deb"
+declare -r APT_SOURCES_REMOTE="${ETC_DIR_REMOTE}/apt/sources.list.d"
+declare -r APT_SOURCES_LOCAL="${ETC_DIR_LOCAL}/apt/sources.list.d"
+declare -r APT_TRUSTED_REMOTE="${ETC_DIR_REMOTE}/apt/trusted.gpg.d"
+declare -r APT_TRUSTED_LOCAL="${ETC_DIR_LOCAL}/apt/trusted.gpg.d"
+declare -r GRAFANA_APT_KEY_URL="https://packages.grafana.com/gpg.key"
+declare -r WEBMIN_APT_KEY_URL="http://www.webmin.com/jcameron-key.asc"
+#declare -r TOR_APT_KEY_URL="https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89"
+declare -r GOOGLE_APT_KEY_URL="https://dl.google.com/linux/linux_signing_key.pub"
+declare -r TVHEADEND_APT_KEY_URL="https://doozer.io/keys/tvheadend/tvheadend/pgp"
+declare -r MKVTOOLNIX_APT_KEY_URL="https://mkvtoolnix.download/gpg-pub-moritzbunkus.txt"
+declare -r DOCKER_APT_KEY_URL="https://download.docker.com/linux/ubuntu/gpg"
+declare -r BACULA_APT_KEY_URL="https://bacula.org/downloads/baculum/baculum.pub"
+declare -r VIRTUALBOX_APT_KEY_URL="https://www.virtualbox.org/download/oracle_vbox_2016.asc"
+declare -r XPRA_APT_KEY_URL="https://xpra.org/gpg.asc"
+declare -r WINE_APT_KEY_URL="https://dl.winehq.org/wine-builds/winehq.key"
+declare -r HWRAID_APT_KEY_URL="http://hwraid.le-vert.net/ubuntu/hwraid.le-vert.net.gpg.key"
+declare -r NODE_APT_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
+declare -r INFLUX_APT_KEY_URL="https://repos.influxdata.com/influxdb.key"
+declare -r NVIDIA_APT_KEY_URL="https://nvidia.github.io/nvidia-docker/gpgkey"
+declare -r CUDA_APT_KEY_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub"
+declare -r APT_MAIN_SOURCE_LOCAL="${ETC_DIR_LOCAL}/apt/sources.list"
+declare -r UBUNTU_UNIVERSE_APT_REPO="deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc) universe"
+declare -r UBUNTU_UNIVERSE_UPDATES_APT_REPO="deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates universe"
+declare -r UBUNTU_MULTIVERSE_APT_REPO="deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc) multiverse"
+declare -r UBUNTU_MULTIVERSE_UPDATES_APT_REPO="deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates multiverse"
+declare -r SAMBA_CONF_REMOTE="${ETC_DIR_REMOTE}/samba/smb.conf"
+declare -r SAMBA_CONF_LOCAL="${ETC_DIR_LOCAL}/samba/smb.conf"
+declare -r SAMBA_CREDENTIALS_FILE_REMOTE="${USER_HOME_DIR_REMOTE}/credentials.txt"
+declare -r WSDD_DIR_LOCAL="${GIT_DIR_LOCAL}/wsdd"
+declare -r WSDD_GIT_URL="git@github.com:christgau/wsdd"
+declare -r NEW_USERS_FILE_REMOTE="${USER_HOME_DIR_REMOTE}/users.txt"
+declare -r WSDD_EXECUTABLE_LINK_TARGET="/usr/bin/wsdd"
+declare -r WSDD_EXECUTABLE_LINK_SOURCE="${WSDD_DIR_LOCAL}/src/wsdd.py"
+declare -r WSDD_SYSTEMD_LINK_TARGET="${WSDD_DIR_LOCAL}/etc/systemd/wsdd.service"
+declare wsddServiceFileLocation=""
+declare -r FFMPEG_INSTALL_SCRIPT_REMOTE="${USER_BIN_DIR_REMOTE}/getffmpeg.sh"
+declare -r FFMPEG_URL="https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz"
+declare -r FFMPEG_FILE_LOCAL="${USER_INSTALLERS_DIR_LOCAL}/ffmpeg-git-amd64-static.tar.xz"
+declare -r VGLRUN_URL="https://sourceforge.net/projects/virtualgl/files/2.6.4/virtualgl_2.6.4_amd64.deb"
+#declare -r POWERLINE_GIT_REPO="git://github.com/ajw107/powerline"
+declare -r POWERLINE_GIT_REPO="git://github.com/powerline/powerline"
+declare -r POWERLINE_CONFIG_REMOTE="${USER_HOME_DIR_REMOTE}/.config/powerline"
+declare -r POWERLINE_CONFIG_LOCAL="${USER_HOME_DIR_LOCAL}/.config/powerline"
+declare -r POWERLINE_FONT_URL="https://github.com/powerline/powerline/raw/develop/font/PowerlineSymbols.otf"
+declare -r POWERLINE_FONT_DIR_LOCAL="/usr/share/fonts/opentype/"
+declare -r POWERLINE_FONT_CONF_URL="https://github.com/powerline/powerline/raw/develop/font/10-powerline-symbols.conf"
+declare -r POWERLINE_FONT_CONF_LOCAL="/etc/fonts/conf.avail/10-powerline-symbols.conf"
+declare -r POWERLINE_FONT_CONF_LINK_LOCAL="/etc/fonts/conf.d/10-powerline-symbols.conf"
+declare -r GO_GIT_URL="https://dl.google.com/go/go1.13.linux-amd64.tar.gz"
+declare -r GO_DIR_LOCAL="/usr/local"
+declare -r DECRED_GIT_URL="git@github.com:decred/dcrd"
+declare -r DECRED_DIR_LOCAL="${GIT_DIR_LOCAL}/dcrd"
+declare -r DECRED_WALLET_GIT_URL="git@github.com:decred/dcrwallet"
+declare -r DECRED_WALLET_DIR_LOCAL="${GIT_DIR_LOCAL}/dcrwallet"
+declare -r FONTS_GIT_URL="git@github.com:ryanoasis/nerd-fonts.git"
+declare -r FONTS_DIR_LOCAL="${GIT_DIR_LOCAL}/nerd-fonts"
+declare -r ORIGINAL_SWAP_FILE_LOCAL=$(swapon --show | awk 'END{print $1}')
+declare -r SED_REMOVE_SWAP="/^\\${ORIGINAL_SWAP_FILE_LOCAL}/d"
+declare -r GET_IPLAYER_GIT_URL="git@github.com:get-iplayer/get_iplayer.git"
+declare -r GET_IPLAYER_DIR_LOCAL="${GIT_DIR_LOCAL}/get-iplayer"
+declare -r NANO_SYNTAX_HIGHLIGHT_GIT_URL="git@github.com:scopatz/nanorc.git"
+declare -r NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL="${GIT_DIR_LOCAL}/nano_highlighting"
+declare -r NANO_SYNTAX_HIGHLIGHT_DIR_GLOBAL_LOCAL="/usr/share/nano-syntax-highlighting"
+declare -r PROG_NAME="makeServer"
+declare -r PROG_VER="1.0"
+declare -r AUTHOR="Alex Wood"
+declare -r AUTHOR_EMAIL="alex@alex-wood.org.uk"
+#gitsToClone[""]=""
+#gitsToClone[""]=""
+#dockerGitsToClone[""]=""
+#dockerGitsToClone[""]=""
+echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+
+######Functions
+function setRegion()
+{
+	##Locale and Region setup
+	infoText "Region" ${INFO_TEXT_APPLY}
+	runCommand "${ROOT_USER_NAME}" "locale-gen ${REGION_CODE}.UTF-8"
+	#sudo update-locale LANG=en_GB.UTF-8 LC_ALL=en_GB.UTF-8 #old way
+	runCommand "${ROOT_USER_NAME}" "localectl set-locale ${REGION_CODE}.utf8"
+	runCommand "${ROOT_USER_NAME}" "localectl set-keymap ${KEYMAP_CODE}"
+	runCommand "${ROOT_USER_NAME}" "localectl set-x11-keymap ${KEYMAP_CODE} ${KEYBOARD_TYPE}"
+	#set timezone, old way of echoing to /etc/timezone and then running
+	#'sudo dpkg-reconfigure --frontend noninteractive tzdata' doesn't work anymore
+	runCommand "${ROOT_USER_NAME}" "timedatectl set-timezone ${TIMEZONE}"
+}
+
+function addUsers()
+{
+	#########Install users
+	infoText "New Users" ${INFO_TEXT_SETUP}
+	#sudo adduser alex
+	#sudo addgroup --gid 1050 dockergroup
+	if $(sudo test -e "${NEW_USERS_FILE_REMOTE}")
+	then
+	    runCommand "${ROOT_USER_NAME}" "newusers ${NEW_USERS_FILE_REMOTE}"
+	else
+	    errorText "[${NEW_USERS_FILE_REMOTE}] does not exist"
+	    exit ${ERROR_FILE_MISSING}
+	fi
+
+	infoText "Secondary Groups" ${INFO_TEXT_ADD}
+	#to save having to chown the whole plex library (a long task) grab the uid and gid from the exisiting library and assign
+	#ERRRMMM RAID is not mounted yet.....
+	#sudo usermod ${PLEX_USER_NAME} --uid $(ls -dn ${RAID_MOUNTPOINT}/appdata/plexdata | awk '{print $3}') -aG ${DOCKERGROUP_NAME}
+	#sudo groupmod ${PLEX_USER_NAME} --gid $(ls -dn ${RAID_MOUNTPOINT}/appdata/plexdata | awk '{print $4}')
+
+	#sudo adduser dockeruser --uid 1050 --ingroup dockergroup
+	#sudo usermod --uid 1050 -aG dockergroup dockeruser
+	#set defaults incase the file does not exist
+	#if [ ! -v alexpass ]
+	#then
+	#    alexpass=alexpass
+	#fi
+}
+
+function updateSystem()
+{
+	#####Install packages and update system
+	infoText "New Repositories" ${INFO_TEXT_ADD}
+	copyFile "${APT_SOURCES_REMOTE}" "${APT_SOURCES_LOCAL}" "${TRUE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	copyFile "${APT_TRUSTED_REMOTE}" "${APT_TRUSTED_LOCAL}" "${TRUE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	getAptKey "grafana" "${GRAFANA_APT_KEY_URL}"
+	getAptKey "webmin" "${WEBMIN_APT_KEY_URL}"
+#	getAptKey "tor" "${TOR_APT_KEY_URL}"
+	getAptKey "google" "${GOOGLE_APT_KEY_URL}"
+	getAptKey "tvheadend" "${TVHEADEND_APT_KEY_URL}"
+	getAptKey "mkvtoolnix" "${MKVTOOLNIX_APT_KEY_URL}"
+	getAptKey "docker" "${DOCKER_APT_KEY_URL}"
+	getAptKey "bacula" "${BACULA_APT_KEY_URL}"
+	getAptKey "virtualbox" "${VIRTUALBOX_APT_KEY_URL}"
+	getAptKey "xpra" "${XPRA_APT_KEY_URL}"
+	getAptKey "wine" "${WINE_APT_KEY_URL}"
+	getAptKey "hwraid" "${HWRAID_APT_KEY_URL}"
+	getAptKey "node" "${NODE_APT_KEY_URL}"
+	getAptKey "influx" "${INFLUX_APT_KEY_URL}"
+	getAptKey "nvidia" "${NVIDIA_APT_KEY_URL}"
+	getAptKey "cuda" "${CUDA_APT_KEY_URL}"
+	#sudo add-apt-repository --yes ppa:mamarley/tvheadend-git-stable
+    #sudo add-apt-repository --yes --no-update ppa:sicklylife/filezilla
+    #sudo add-apt-repository --yes --no-update ppa:musicbrainz-developers/stable
+    #sudo add-apt-repository --yes --no-update ppa:flexiondotorg/audio
+    infoText "Universe and Multiverse Repositories" ${INFO_TEXT_ADD}
+	appendToFile "${APT_MAIN_SOURCE_LOCAL}" "${UBUNTU_UNIVERSE_APT_REPO}"
+	appendToFile "${APT_MAIN_SOURCE_LOCAL}" "${UBUNTU_UNIVERSE_UPDATES_APT_REPO}"
+	appendToFile "${APT_MAIN_SOURCE_LOCAL}" "${UBUNTU_MULTIVERSE_APT_REPO}"
+	appendToFile "${APT_MAIN_SOURCE_LOCAL}" "${UBUNTU_MULTIVERSE_UPDATES_APT_REPO}"
+
+        sudo dpkg --add-architecture i386
+
+	infoText "Software Updates" ${INFO_TEXT_APPLY}
+        aptUpgrade
+
+	infoText "New Software via apt" ${INFO_TEXT_INSTALL}
+	sudo debconf-set-selections <<< "postfix postfix/main_mailer_type string 'No Configuration'"
+	aptInstall "${PACKAGES_TO_INSTALL}"
+}
+
+function installPipCompletion()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/pipCompletion-install.log"
+
+    ##setup pip and pip3 bash_completion
+    infoText "pip bash completion (Logging to ${logfile})" ${INFO_TEXT_SETUP}
+    sudo -H pip install --upgrade pip &> "${logfile}"
+    sudo -H pip3 install --upgrade pip &>> "${logfile}"
+    pip completion --bash | sudo tee "${BASH_COMPLETION_LOCAL}/pip" &>> "${logfile}"
+    pip3 completion --bash | sudo tee "${BASH_COMPLETION_LOCAL}/pip3" &>> "${logfile}"
+}
+
+function setupGit()
+{
+	##create git directory
+	infoText "SSH Keys and config" ${INFO_TEXT_COPY}
+	copyFile "${USER_SSH_DIR_REMOTE}" "${USER_SSH_DIR_LOCAL}" "${TRUE}" "${USER_NAME}:${GROUP_NAME}"
+
+	infoText "GIT" ${INFO_TEXT_SETUP}
+	makeDirectory "${GIT_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+	runCommand "${USER_NAME}" "git config --global user.name ${GIT_NAME}"
+	runCommand "${USER_NAME}" "git config --global user.email ${GIT_EMAIL}"
+    #So you can e-mail diffs, etc from git itself
+	runCommand "${USER_NAME}" "git config --global sendemail.smtpserver /usr/bin/esmtp"
+    #Stores git user names and passwords to disk (we're using ssh keys, so this shouldn't matter).
+    #Use 'store' instead of 'cache' to store them on disk instead
+	runCommand "${USER_NAME}" "git config --global credential.helper cache"
+	runCommand "${USER_NAME}" "git config --global core.sshCommand 'ssh -i ${USER_SSH_DIR_LOCAL}/github_rsa -F /dev/null'"
+	runCommand "${USER_NAME}" "git config --global user.signingKey 5CB32EC33C62EB47"
+	runCommand "${USER_NAME}" "git config --global commit.gpgSign true"
+
+    #it may be a Man in the Middle security hole, but a prompt to accept an rsa key in a script is a bad thing
+    #also, everyone just types yes, and never checks the fingerprint anyway
+    local host="github.com"
+    for ip in $(dig @1.1.1.1 ${host} +short)
+    do
+        runCommand "${USER_NAME}" "ssh-keygen -R ${host}"
+        runCommand "${USER_NAME}" "ssh-keygen -R ${ip}"
+        runCommand "${USER_NAME}" "ssh-keygen -R ${host},${ip}"
+        sudo -u ${USER_NAME} -H ssh-keyscan -H ${host} >> "${USER_SSH_DIR_LOCAL}/known_hosts" 2>/dev/null
+        sudo -u ${USER_NAME} -H ssh-keyscan -H ${ip} >> "${USER_SSH_DIR_LOCAL}/known_hosts" 2>/dev/null
+        sudo -u ${USER_NAME} -H ssh-keyscan -H ${host},${ip} >> "${USER_SSH_DIR_LOCAL}/known_hosts" 2>/dev/null
+    done
+}
+
+function installWormhole()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/wormhole-install.log"
+
+	##install wormhole
+	infoText "Magic-Wormhole (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+    sudo -H pip3 install --upgrade magic-wormhole &> "${logfile}"
+}
+
+function installDockerCompose()
+{
+	##install docker compose and bash completion for it
+    ##(remember to add dc to completion, the bash alias for docker-compose)
+	infoText "Docker-Compose" ${INFO_TEXT_INSTALL}
+	download "${DOCKER_COMPOSE_GIT_URL}" "${DOCKER_COMPOSE_LOCAL}"
+	runCommand "${ROOT_USER_NAME}" "chmod +x '${DOCKER_COMPOSE_LOCAL}'"
+	download "${DOCKER_COMPOSE_BASH_COMPLETION_URL}" "${DOCKER_COMPOSE_BASH_COMPLETION_TEMP}"
+	sed "${DOCKER_COMPOSE_BASH_COMPLETION_SED}" "${DOCKER_COMPOSE_BASH_COMPLETION_TEMP}" | sudo tee "${DOCKER_COMPOSE_BASH_COMPLETION_LOCAL}" &>/dev/null
+	deleteFile "${DOCKER_COMPOSE_BASH_COMPLETION_TEMP}"
+}
+
+function setupSamba()
+{
+	######SAMBA setup
+	infoText "Samba" ${INFO_TEXT_SETUP}
+	#grab samba credentials file
+	if $(sudo test -e "${SAMBA_CREDENTIALS_FILE_REMOTE}")
+	then
+	    source "${SAMBA_CREDENTIALS_FILE_REMOTE}"
+	else
+	    errorText "Samba Credentials File not found at [${SAMBA_CREDENTIALS_FILE_REMOTE}]"
+	    exit ${ERROR_FILE_MISSING}
+	fi
+	copyFile "${SAMBA_CONF_REMOTE}" "${SAMBA_CONF_LOCAL}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	echo -ne "${SAMBA_PASS}\n${SAMBA_PASS}" | sudo smbpasswd -a -s "${SAMBA_USER}"
+	runCommand "${ROOT_USER_NAME}" "smbpasswd -e ${SAMBA_USER}"
+}
+
+function installFfmpeg()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/ffmpeg-build.log"
+
+	infoText "ffMPEG (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+	cd "${USER_INSTALLERS_DIR_LOCAL}"
+	#${FFMPEG_INSTALL_SCRIPT_REMOTE} &> "${logfile}"
+    download "${FFMPEG_URL}" "${FFMPEG_FILE_LOCAL}"
+    tar xvf "${FFMPEG_FILE_LOCAL}" &> "${logfile}"
+    cd ffmpeg-git-*-static
+    sudo install -m 755 ff* /usr/bin &>> "${logfile}"
+}
+
+function installPlex()
+{
+    local plexLibraryFolder="${VAR_DIR_LOCAL}/lib/plexmediaserver"
+
+	infoText "PlexMediaServer" ${INFO_TEXT_INSTALL}
+	cd "${USER_INSTALLERS_DIR_LOCAL}"
+	download "${PLEX_SERVER_URL}" "${USER_INSTALLERS_DIR_LOCAL}/$(basename ${PLEX_SERVER_URL})"
+
+	###clear up any old installs of plex, as can cause install problems
+	infoText "Cleaning up old installs of PlexMediaServer" ${INFO_TEXT_MISC}
+    runCommand "${ROOT_USER_NAME}" "dpkg --purge plexmediaserver"
+    #if $(sudo test -e "${plexLibraryFolder}")
+    #then
+    #    if [[ $(stat "${plexLibraryFolder}") != *"symbolic link"* ]]
+    #    then
+    #        infoText "Deleting ${plexLibraryFolder}" ${INFO_TEXT_MISC}
+	#        deleteFile "${plexLibraryFolder}"
+    #    fi
+    #fi
+
+	infoText "PlexMediaServer" ${INFO_TEXT_INSTALL}
+	runCommand "${ROOT_USER_NAME}" "dpkg -i $(basename ${PLEX_SERVER_URL})"
+	###no point in running plex until RAID is installed, so stop it
+	infoText "Stopping PlexMediaServer Service as RAID and POOL not configured yet" ${INFO_TEXT_MISC}
+    runCommand "${ROOT_USER_NAME}" "systemctl stop plexmediaserver"
+	infoText "Disabling PlexMediaServer Service as RAID and POOL not configured yet" ${INFO_TEXT_MISC}
+	runCommand "${ROOT_USER_NAME}" "systemctl disable plexmediaserver"
+
+	###we use a link from plex library to the array, this won't copy over the real directory currently present, so nuke it
+    if $(sudo test -e "${plexLibraryFolder}")
+    then
+        if [[ $(stat "${plexLibraryFolder}") != *"symbolic link"* ]] || [[ $(stat "${plexLibraryFolder}") != *"${RAID_MOUNTPOINT}/appdata/plexdata"* ]]
+        then
+            infoText "Deleting ${plexLibraryFolder}" ${INFO_TEXT_MISC}
+	        deleteFile "${plexLibraryFolder}"
+        fi
+    fi
+
+    #RAID isn;t mounted yet, so don't do this here, do it in makeRaid
+    #sudo chown -R ${PLEX_USER_NAME}:${PLEX_USER_NAME} "${RAID_MOUNTPOINT}/appdata/plexdata"
+    #sudo chown -R ${PLEX_USER_NAME}:${PLEX_USER_NAME} "${VAR_DIR_LOCAL}/lib/plexmediaserver"
+    #makeDirectory "/data" "${PLEX_USER_NAME}:${PLEX_USER_NAME}"
+    #linkFile "/data/tvshows" "${POOL_MOUNTPOINT}/TV"
+    #linkFile "/data/movies" "${POOL_MOUNTPOINT}/Movies"
+}
+
+function installWsdd()
+{
+	infoText "WSDD" ${INFO_TEXT_INSTALL}
+	cd "${GIT_DIR_LOCAL}"
+	makeDirectory "${WSDD_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+	runCommand "${USER_NAME}" "git clone ${WSDD_GIT_URL} '$(basename ${WSDD_DIR_LOCAL})'"
+	linkFile "${WSDD_EXECUTABLE_LINK_TARGET}" "${WSDD_EXECUTABLE_LINK_SOURCE}"
+	wsddServiceFileLocation="$(dirname ${WSDD_SYSTEMD_OVERRIDE_LOCAL})"
+	wsddServiceFileLocation="${wsddServiceFileLocation%%.d}"
+	linkFile "${wsddServiceFileLocation}" "${WSDD_SYSTEMD_LINK_TARGET}"
+	makeDirectory "$(dirname ${WSDD_SYSTEMD_OVERRIDE_LOCAL})" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	copyFile "${WSDD_SYSTEMD_OVERRIDE_REMOTE}" "${WSDD_SYSTEMD_OVERRIDE_LOCAL}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+}
+
+function installFiremotd()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/firemotd-build.log"
+
+	infoText "FireMotD (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+	cd "${GIT_DIR_LOCAL}"
+	makeDirectory "${FIREMOTD_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+	runCommand "${USER_NAME}" "git clone ${FIREMOTD_GIT_URL} '$(basename ${FIREMOTD_DIR_LOCAL})'"
+	cd "${FIREMOTD_DIR_LOCAL}"
+	sudo make install &> "${logfile}"
+	sudo make bash_completion &>> "${logfile}"
+	#source "${ETC_DIR_LOCAL}/bash_completion" #just soruce bashrc at the end of everything, much faster
+	if $(sudo test -d "${ETC_DIR_LOCAL}/cron.d")
+	then
+	    makeDirectory "${ETC_DIR_LOCAL}/cron.d" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	fi
+	echo -e "# FireMotD system updates check (randomly execute between 0:00:00 and 5:59:59)\n0 0 * * * ${ROOT_USER_NAME} perl -e 'sleep int(rand(21600))' && /usr/local/bin/FireMotD -S &>/dev/null" | sudo tee "${ETC_DIR_LOCAL}/cron.d/FireMotD" &>> "${logfile}"
+	echo -e "DPkg::Post-Invoke {\n  \"if [ -x /usr/local/bin/FireMotD ]; then echo -n 'Updating FireMotD available updates count ... '; /usr/local/bin/FireMotD -sru -S; echo ''; fi\";\n};" | sudo tee "${ETC_DIR_LOCAL}/apt/apt.conf.d/15firemotd" &>> "${logfile}"
+	echo -e "/usr/local/bin/FireMotD -T Original -D all" | sudo tee -a "${ETC_DIR_LOCAL}/bash.bashrc" &>> "${logfile}"
+	runCommand "${ROOT_USER_NAME}" "chmod -R 777 /usr/share/firemotd"
+	FireMotD -G all -d &>> "${logfile}"
+	FireMotD -S &>> "${logfile}"
+}
+
+function installPushover()
+{
+	###Install pushover
+	infoText "Pushover-Bash" ${INFO_TEXT_INSTALL}
+	cd "${GIT_DIR_LOCAL}"
+	makeDirectory "${PUSHOVER_BASH_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+	runCommand "${USER_NAME}" "git clone ${PUSHOVER_BASH_GIT_URL} '$(basename ${PUSHOVER_BASH_DIR_LOCAL})'"
+    #make the script executable
+    runCommand "${ROOT_USER_NAME}" "chmod +x '${PUSHOVER_BASH_DIR_LOCAL}/pushover.sh'"
+    if $(sudo test -e "${USER_BIN_DIR_LOCAL}/pushover")
+    then
+        deleteFile "${USER_BIN_DIR_LOCAL}/pushover"
+    fi
+    ##hmm not sure if I should put this in /usr/local/sbin or my own bin
+    linkFile "${USER_BIN_DIR_LOCAL}/pushover" "${PUSHOVER_BASH_DIR_LOCAL}/pushover.sh"
+}
+
+function installFonts()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/nerdfonts-install.log"
+	###Install fonts
+	infoText "nerd-fonts" ${INFO_TEXT_DOWNLOAD}
+	cd "${GIT_DIR_LOCAL}"
+	makeDirectory "${FONTS_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+    warnText "This will take a long time (~5GB of files)"
+	runCommand "${USER_NAME}" "git clone ${FONTS_GIT_URL} \"$(basename ${FONTS_DIR_LOCAL})\" --depth=1"
+    cd "${FONTS_DIR_LOCAL}"
+    infoText "DejaVuSansMono Font (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+    sudo ./install.sh -S DejaVuSansMono &> "${logfile}"
+    
+    #delete the folder now, it's big and we don't need it anymore
+    infoText "Deleting Git Font Folder to save disk space" ${INFO_TEXT_MISC}
+    deleteFile "${FONTS_DIR_LOCAL}"
+}
+
+function installGDrive()
+{
+     local mountPoint="${1}"
+
+     infoText "GDrive Mounter"  ${INFO_TEXT_INSTALL}
+     infoText "Not Mounting gDrive at [${mountPoint}]" ${INFO_TEXT_MISC}
+
+     runCommand "${ROOT_USER_NAME}" "add-apt-repository -y ppa:alessandro-strada/google-drive-ocamlfuse-beta"
+     #sudo apt-get update
+     #sudo apt-get upgrade -y
+     aptInstall "google-drive-ocamlfuse"
+     makeDirectory "${mountPoint}" "${USER_NAME}:${GROUP_NAME}"
+     #sudo -Hu ${USER_NAME} google-drive-ocamlfuse "${mountPoint}"
+}
+
+function installVglrun()
+{
+	###installing vglrun for xpra
+	infoText "VirtualGL" ${INFO_TEXT_INSTALL}
+	cd "${USER_INSTALLERS_DIR_LOCAL}"
+	download "${VGLRUN_URL}" "$(basename ${VGLRUN_URL})"
+	runCommand "${ROOT_USER_NAME}" "dpkg -i $(basename ${VGLRUN_URL})"
+}
+
+function installPowerline()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/powerline-install.log"
+
+	##install powerline
+	infoText "Powerline (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+    makeDirectory "${POWERLINE_FONT_DIR_LOCAL}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    sudo -H pip3 install --upgrade git+${POWERLINE_GIT_REPO} &> "${logfile}"
+
+    #install fonts (not sure if this required,but why not)
+    download "${POWERLINE_FONT_URL}" "${POWERLINE_FONT_DIR_LOCAL}/$(basename ${POWERLINE_FONT_URL})"
+    sudo fc-cache -vf "$(dirname ${POWERLINE_FONT_DIR_LOCAL})" &>> "${logfile}"
+    download "${POWERLINE_FONT_CONF_URL}" "${POWERLINE_FONT_CONF_LOCAL}"
+    linkFile "${POWERLINE_FONT_CONF_LINK_LOCAL}" "${POWERLINE_FONT_CONF_LOCAL}"
+
+    infoText "Powerline Dependencies" ${INFO_TEXT_INSTALL}
+    #install psutils required for CPU and Network load segments
+    runCommand "${ROOT_USER_NAME}" "pip3 install --upgrade psutil" &>> "${logfile}"
+
+    #install gitstatus segment
+    runCommand "${ROOT_USER_NAME}" "pip3 install --upgrade powerline-gitstatus" &>> "${logfile}"
+
+    #required for internal git status segment (not gitsttaus which we use)
+    runCommand "${ROOT_USER_NAME}" "pip3 install --upgrade pygit2" &>> "${logfile}"
+
+    #required for segments which watch system files
+    runCommand "${ROOT_USER_NAME}" "pip3 install --upgrade pyuv" &>> "${logfile}"
+
+    #shell version of powerline uses socat , we use the python version but shell is apparently faster
+    aptInstall "socat" &>> "${logfile}"
+
+    #Config files will be copied across during USER_HOME_DIR copy section
+    #copyFiles "${POWERLINE_CONFIG_REMOTE}" "${POWERLINE_CONFIG_LOCAL}" "${TRUE}" "${USER_NAME}:${GROUP_NAME}"
+
+    #Add startup commands to bash profile (best for whole system, then it works when you su)
+    appendToFile "${SYSTEM_BASHRC_LOCAL}" "\n###Powerline Init####\npowerline-daemon -q\nPOWERLINE_BASH_CONTINUATION=1\nPOWERLINE_BASH_SELECT=1\nsource $(pip3 show powerline-status | grep Location | awk 'FS=":"{print $2}')/powerline/bindings/bash/powerline.sh\n"
+}
+
+function installGo()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/go-install.log"
+
+	infoText "GO (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+    ##installs the Go programming language
+    if ! $(sudo test -e "${GO_DIR_LOCAL}")
+    then
+        #this shouldn't happen as go usually likes to install in /usr/local which should always exist
+        makeDirectory "${GO_DIR_LOCAL}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    fi
+    cd "${USER_INSTALLERS_DIR_LOCAL}"
+    download "${GO_GIT_URL}" "${USER_INSTALLERS_DIR_LOCAL}/$(basename ${GO_GIT_URL})"
+    sudo tar -C "${GO_DIR_LOCAL}/" -xzf "${USER_INSTALLERS_DIR_LOCAL}/$(basename ${GO_GIT_URL})" | sudo tee "${logfile}"
+    #sudo mv "${GO_DIR_LOCAL}/go-go"* "${GO_DIR_LOCAL}/go"
+    makeDirectory "${USER_HOME_DIR_LOCAL}/go" "${USER_NAME}:${GROUP_NAME}"
+    appendToFile "${USER_BASHRC_LOCAL}" "export PATH=\$PATH:${GO_DIR_LOCAL}/go/bin:\$GOPATH/bin"
+}
+
+function installDecred()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/decred-install.log"
+
+    infoText "Decred (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+    source "${USER_BASHRC_LOCAL}"
+    cd "${GIT_DIR_LOCAL}"
+    makeDirectory "${DECRED_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+    runCommand "${USER_NAME}" "git clone ${DECRED_GIT_URL} '$(basename ${DECRED_DIR_LOCAL})'"
+    cd "${DECRED_DIR_LOCAL}"
+    go install . ./cmd/... &> "${logfile}"
+
+    cd "${GIT_DIR_LOCAL}"
+    makeDirectory "${DECRED_WALLET_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+    runCommand "${USER_NAME}" "git clone ${DECRED_WALLET_GIT_URL} '$(basename ${DECRED_WALLET_DIR_LOCAL})'"
+    cd "${DECRED_WALLET_DIR_LOCAL}"
+    go install &>> "${logfile}"
+}
+
+function installH265ize()
+{
+    infoText "h265ize" ${INFO_TEXT_INSTALL}
+
+    sudo npm install FallingSnow/h265ize --global
+
+    sudo snap install vobsub2srt
+}
+
+function updateNpm()
+{
+    infoText "npm" ${INFO_TEXT_INSTALL}
+
+    sudo npm install npm --global
+}
+
+function installGetIplayer()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/get-iplayer-install.log"
+
+    infoText "Get iPlayer (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+
+    infoText "Get-Iplayer Perl Dependancies" ${INFO_TEXT_INSTALL}
+    #This just tells CPAN to autosetup itslef, so we don;t get a prompt whilst running the script
+    sudo perl -MCPAN -e 'my $c = "CPAN::HandleConfig"; $c->load(doit => 1, autoconfig => 1); $c->edit(prerequisites_policy => "follow"); $c->edit(build_requires_install_policy => "yes"); $c->commit'
+    runCommand "${ROOT_USER_NAME}" "cpan -u" &>"${logfile}"
+    runCommand "${ROOT_USER_NAME}" "cpan -u install CPAN" &>>"${logfile}"
+    runCommand "${ROOT_USER_NAME}" "cpan -u install LWP LWP::Protocol::https XML::LibXML Mojolicious CGI HTTP::Request CPAN::DistnameInfo HTML::HeadParser Log::Log4perl YAML HTML::Entities" &>>"${logfile}"
+
+    #dependancies atomic parsely installed via initial apt install and ffmpeg separately via installffmpeg()
+
+    infoText "Get-Iplayer" ${INFO_TEXT_DOWNLOAD}
+    cd "${GIT_DIR_LOCAL}"
+    runCommand "${USER_NAME}" "git clone ${GET_IPLAYER_GIT_URL} '${GET_IPLAYER_DIR_LOCAL}'" &>>"${logfile}"
+
+    infoText "Get-Iplayer" ${INFO_TEXT_INSTALL}
+    cd "${GET_IPLAYER_DIR_LOCAL}"
+    runCommand "${ROOT_USER_NAME}" "install -m 755 --target-directory='/usr/local/bin' get_iplayer get_iplayer.cgi" &>>"${logfile}"
+    linkFile "/usr/local/bin/get-iplayer" "get_iplayer"
+    runCommand "${ROOT_USER_NAME}" "install -m 644 -D --target-directory='/usr/local/share/man/man1' get_iplayer.1" &>>"${logfile}"
+    linkFile "/usr/local/share/man/man1/get-iplayer.1" "get_iplayer.1"
+    runCommand "${ROOT_USER_NAME}" "mandb" &>>"${logfile}"
+}
+
+function installNanoHighlighting()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/nano-highlighting-install.log"
+
+    infoText "Nano Syntax Highlighting (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+
+    cd "${GIT_DIR_LOCAL}"
+    makeDirectory "${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+    runCommand "${USER_NAME}" "git clone ${NANO_SYNTAX_HIGHLIGHT_GIT_URL} '$(basename ${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL})'" &>"${logfile}"
+    cd "${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL}"
+    makeDirectory "${NANO_SYNTAX_HIGHLIGHT_DIR_GLOBAL_LOCAL}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    runCommand "${ROOT_USER_NAME}" "cp -v "${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL}"/*.nanorc "${NANO_SYNTAX_HIGHLIGHT_DIR_GLOBAL_LOCAL}"/" &>>"${logfile}"
+}
+
+function copySystemFiles()
+{
+	infoText "System Files" ${INFO_TEXT_COPY}
+	#sudo cp -f -p ${USER_HOME_DIR_REMOTE}/fstab.temp\ /etc/fstab
+	copyFile "${SUDOERS_REMOTE}"  "${SUDOERS_LOCAL}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	#sudo visudo -f "${SUDOERS_LOCAL}"
+	#copyFile "${NANORC_REMOTE}" "${NANORC_LOCAL}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+	copyFile "${USER_BASHRC_REMOTE}" "${USER_BASHRC_LOCAL}" "${FALSE}" "${USER_NAME}:${GROUP_NAME}"
+	copyFile "${USER_PROFILE_REMOTE}" "${USER_PROFILE_LOCAL}" "${FALSE}" "${USER_NAME}:${GROUP_NAME}"
+	#copyFile "${SAMBA_CREDENTIALS_FILE_REMOTE}" "${SAMBA_CREDENTIALS_FILE_LOCAL}" "${FALSE}" "${USER_NAME}:${GROUP_NAME}"
+	#copyFile "${NEW_USERS_FILE_REMOTE}" "${NEW_USERS_FILE_LOCAL}" "${FALSE}" "${USER_NAME}:${GROUP_NAME}"
+	#copyFile "${BASH_ALIASES_REMOTE}" "${BASH_ALIASES_LOCAL}" "${FALSE}" "${USER_NAME}:${GROUP_NAME}"
+	#copyFile "${}" "${}" "${FALSE}"
+}
+
+function copyMakeServerFiles()
+{
+	infoText "makeServer" ${INFO_TEXT_COPY}
+	copyOverFiles "MAKESERVER_FILES_TO_COPY" "${USER_HOME_DIR_REMOTE}" "${MAKESERVER_CONFIG_FILES_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+}
+
+function copyUserFiles()
+{
+	#USER_HOME_DIRS_TO_COPY
+	infoText "User [${USER_NAME}]" ${INFO_TEXT_COPY}
+
+    #create any directories that are not there by default and won't be created during copy
+	makeDirectory "${USER_BIN_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+
+    #Actual Copy
+    copyStuff "USER_HOME" "${USER_NAME}:${GROUP_NAME}"
+
+    #get rid of cached stuff which should be regenerated for new install
+	deleteFile "${USER_HOME_DIR_LOCAL}/.config/deluge/gtk3ui_state"
+	deleteFile "${USER_HOME_DIR_LOCAL}/.config/deluge/gtkui_state"
+
+    ##get-iplayer is run by dockeruser most of the time
+    runCommand "${ROOT_USER_NAME}" "chown -R ${DOCKERUSER_NAME}:${DOCKERGROUP_NAME} '${USER_HOME_DIR_LOCAL}/.get_iplayer'"
+}
+
+function copyEtcFiles()
+{
+	infoText "[${ETC_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+    copyStuff "ETC" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+}
+
+function copyVarFiles()
+{
+	infoText "[${VAR_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+	#copyFiles will now remake the directory before copying the remote version over
+    copyStuff "VAR" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+
+    #The UID should be the same, but just in case
+    for file in $(sudo ls /var/spool/cron/crontabs/)
+    do
+        runCommand "${ROOT_USER_NAME}" "chown ${file}:${file} '${VAR_DIR_LOCAL}/spool/cron/crontabs/${file}'"
+    done
+
+    ##The UID for these will have changed, so reapply with new UID
+    for dir in "lib/mysql" "lib/chronograf" "lib/kapacitor"
+    do
+        local user=$(basename ${dir})
+        runCommand "${ROOT_USER_NAME}" "chown -R ${user}:${user} '${VAR_DIR_LOCAL}/${dir}'"
+    done
+}
+
+function copyOptFiles()
+{
+	infoText "[${OPT_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+    copyStuff "OPT" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+
+    #Applying permissions to specific files/directories
+    runCommand "${ROOT_USER_NAME}" "chown -R smartbulbs:smartbulbs '${OPT_DIR_LOCAL}/node/smartthings-smartbulbs'"
+    runCommand "${ROOT_USER_NAME}" "chown -R smartbulbs:smartbulbs '${OPT_DIR_LOCAL}/node/TP-Link-SmartThings'"
+}
+
+function copyRootHomeFiles()
+{
+	infoText "[${ROOT_HOME_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+    copyStuff "ROOT_HOME" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+}
+
+function copyDockeruserHomeFiles()
+{
+	infoText "[${DOCKERUSER_HOME_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+    copyStuff "DOCKERUSER_HOME" "${DOCKERUSER_NAME}:${DOCKERGROUP_NAME}"
+
+    #get-iplayer is ran by dockeruser most of the time
+    if $(sudo test -e "${DOCKERUSER_HOME_DIR_LOCAL}/.get_iplayer")
+    then
+        deleteFile "${DOCKERUSER_HOME_DIR_LOCAL}/.get_iplayer"
+    fi
+    linkFile "${DOCKERUSER_HOME_DIR_LOCAL}/.get_iplayer" "${USER_HOME_DIR_LOCAL}/.get_iplayer"
+}
+
+#function copyTimHomeFiles()
+#{
+#	infoText "[${TIM_HOME_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+#    copyStuff "TIM_HOME" "${TIM_USER_NAME}:${TIM_USER_NAME}"
+#}
+
+function copySmartbulbsHomeFiles()
+{
+	infoText "[${SMARTBULBS_HOME_DIR_LOCAL}]" ${INFO_TEXT_COPY}
+    copyStuff "SMARTBULBS_HOME" "${SMARTBULBS_USER_NAME}:${SMARTBULBS_USER_NAME}"
+}
+
+function setupSwap()
+{
+	infoText "SwapSpace" ${INFO_TEXT_SETUP}
+    if (( $(swapon --show| wc -l) > 0 ))
+    then
+	    sed ${SED_REMOVE_SWAP} "${fstabLocation}" | sudo tee "${fstabLocation}" &>/dev/null
+	    runCommand "${ROOT_USER_NAME}" "swapoff -a"
+	    deleteFile "${ORIGINAL_SWAP_FILE_LOCAL}"
+    fi
+}
+
+function downloadGitRepos()
+{
+    local type="${1}"
+    local -n arrayOfRepos="${2}"
+    local destination="${3}"
+
+	####download repositories
+	infoText "${type} Repositories (Which do not require immediate building or installing) into [${destination}]"  ${INFO_TEXT_DOWNLOAD}
+
+    #make directory will normally move a folder into originals if it is found in the place we wank to make a new directory
+    #this is fine ussually, but as we've just used git to inst6all some packages,it will exist, and we want to keep it
+    #but still make sure the git directory exists in case things change in the future
+    if ! $(sudo test -d "${destination}")
+    then
+        makeDirectory "${destination}" "${USER_NAME}:${GROUP_NAME}"
+    fi
+	cd "${destination}"
+	if (( ${#arrayOfRepos[@]} > 0 ))
+	then
+	    declare -i count=1
+	    for repositoryName in "${!arrayOfRepos[@]}"
+	    do
+	        infoText "[${count}/${#arrayOfRepos[@]}]Cloning [${repositoryName}] into [${destination}/${repositoryName}]..." ${INFO_TEXT_MISC}
+	        makeDirectory "${destination}/${repositoryName}" "${USER_NAME}:${GROUP_NAME}"
+	        runCommand "${USER_NAME}" "git clone ${arrayOfRepos[${repositoryName}]} '${repositoryName}'"
+	        let count++
+	    done
+	fi
+}
+
+function setupServices()
+{
+	####All files copied over, restart services to make use of new config
+	###or could reload instead of restart??!??
+	infoText "Reloading Services to pick up new config files" ${INFO_TEXT_MISC}
+	#source "${ETC_DIR_LOCAL}/bash_completion"
+	source "${USER_BASHRC_LOCAL}"
+	runCommand "${ROOT_USER_NAME}" "systemctl daemon-reload"
+	###disable services that require the pool or RAID to be mounted
+	for service in ${SERVICES_TO_HOLD_UNTIL_RAID_MOUNTED[@]}
+	do
+	    infoText "Disabling [${service}] as Pool and RAID Array are not yet configured" ${INFO_TEXT_MISC}
+	    runCommand "${ROOT_USER_NAME}" "systemctl stop ${service}"
+	    runCommand "${ROOT_USER_NAME}" "systemctl disable ${service}"
+	done
+
+	##these are okay to enable
+	for service in wsdd smartbulbserver tplinkSmartAppServer apt-update.timer
+	do
+	    infoText "Enabling [${service}]" ${INFO_TEXT_MISC}
+	    runCommand "${ROOT_USER_NAME}" "systemctl enable ${service}"
+	    runCommand "${ROOT_USER_NAME}" "systemctl start ${service}"
+	done
+
+	restartServices
+}
+
+function finishOff()
+{
+    infoText "Finishing Off Initial Setup" ${INFO_TEXT_MISC}
+
+    #enable watchdog timer so ESXi doesn;t keep on resetting the VM
+    # using /etc/default/watchdog now, so don;t do this, as would need to edit the files after
+    # each kernel update, which is just daft
+    #for locations in "/usr/lib /etc"
+    #do
+    #    sudo sed -i 's/^blacklist wdat_wdt/#blacklist wdat_wdt/' $(sudo grep -rl "wdat_wdt" "${locations}/modprobe.d")
+    #done
+
+    ##For Some reason gdm3 is being installed, being a headerless server this is pointless, remove it
+    aptRemove "gdm3"
+
+    #not sure if this is needed, but elasticsearch for docker recommends it for production
+    sudo sysctl -w vm.max_map_count=262144
+}
+
+######Option and Parameter (Argument) parsing
+
+
+######Main Code
+###Make sure we're running with sudo
+#echo -e "${NORMAL_TEXT}${NORMAL_BACKGROUND}Clearing screen...${NORMAL_TEXT}${NORMAL_BACKGROUND}"
+#echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+#clear
+infoText "MAIN CODE START [${PROG_NAME} v${PROG_VER} by ${AUTHOR} (${AUTHOR_EMAIL})]" ${INFO_TEXT_MISC_NO_DOTS}
+sudoCheck
+
+#check correct device is mopunted, although i you can
+#run this script it's got to be
+checkMount "${REMOTE_MOUNTPOINT}" "${REMOTE_DEVICE}"
+
+##set region
+setRegion
+
+##Install users
+addUsers
+
+##Install packages and update system
+updateSystem
+
+##install software packages not available through apt
+makeDirectory "${USER_INSTALLERS_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+
+##System Files
+copySystemFiles
+
+##User Home Files
+copyUserFiles
+
+##setup pip and pip3 bash_completion
+installPipCompletion
+
+##update npm
+updateNpm
+
+##Setup GIT
+setupGit
+
+##install fonts
+installFonts
+
+##install wormhole
+installWormhole
+
+##install docker compose
+installDockerCompose
+
+##Install ffMPEG
+installFfmpeg
+
+##Install Get-Iplayer
+installGetIplayer
+
+##installPlexMediaServer
+installPlex
+
+##install WSDD
+installWsdd
+
+##installFireMotD
+installFiremotd
+
+###Install pushover
+installPushover
+
+##install Google Drive Mounter
+installGDrive "${GDRIVE_MOUNTPOINT}"
+
+##installing vglrun for xpra
+installVglrun
+
+#####Copy over files and dirs
+##makeServer files
+copyMakeServerFiles
+
+##ETC Files
+copyEtcFiles
+
+##VAR files
+copyVarFiles
+
+##OPT Files
+copyOptFiles
+
+##ROOT's Home Directory files
+copyRootHomeFiles
+
+##Dockeruser's Home Directory Files
+copyDockeruserHomeFiles
+
+##Smartbulbs's Home Directory Files
+copySmartbulbsHomeFiles
+
+##Tim's Home Directory Files
+#copyTimHomeFiles
+
+##install Go Programming Language
+installGo
+
+##Install Decred Wallet
+installDecred
+
+##Setting Up SwapSpace
+setupSwap
+
+##SAMBA setup
+setupSamba
+
+##install powerline (must be done after bash.bashrc is copied over)
+installPowerline
+
+##install h265ize
+installH265ize
+
+##Download GIT repositories
+if (( ${#gitsToClone[@]} > 0 ))
+then
+    downloadGitRepos "GIT" "gitsToClone" "${GIT_DIR_LOCAL}"
+fi
+
+##Download Docker GIT repositories
+if (( ${#dockerGitsToClone[@]} > 0 ))
+then
+    downloadGitRepos "Docker GIT" "dockerGitsToClone" "${DOCKER_GIT_DIR_LOCAL}"
+fi
+
+infoText "Secondary groups to users" ${INFO_TEXT_ADD}
+###have to do this here as xpra isn;t installed when we do the main usermods above
+runCommand "${ROOT_USER_NAME}" "usermod ${USER_NAME} -aG sudo,adm,lpadmin,xpra,${ROOT_USER_NAME},docker,${DOCKERGROUP_NAME},${PLEX_USER_NAME},${SMARTBULBS_USER_NAME}"
+
+##Enable and Restart services to pick up new config
+setupServices
+
+##Finish Off Initial Setup
+finishOff
+
+infoText "byobu-launcher: ONLY execute when read through all above output" ${INFO_TEXT_MISC_NO_DOTS}
+warnText "***** THIS WILL CLEAR THE SCREEN AND HISTORY! *****"
+infoText "Feel free to now run makePool , makeRaid and makeIscsi if there were no errors above" ${INFO_TEXT_MISC_NO_DOTS}
+infoText "To mount gDrive run google-drive-ocamlfuse <mountPoint>" ${INFO_TEXT_MISC_NO_DOTS}
+infoText "Check if pushover works, if not change env to bash at top of file" ${INFO_TEXT_MISC_NO_DOTS}

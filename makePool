@@ -1,0 +1,444 @@
+#!/usr/bin/env bash
+#####TODO
+#-copy over snapraid config and runner and clone,compile and make it
+#-check if somethign is mounted there too, if so check if it's the drive, if not throw an error
+#-debugEcho
+#-individual drives mount options aren;t working
+#-change sudo so instead of seeing if sudo was called it sees if sudo CAN be called (without a password obviously)
+#-try and get rid of sudo for git clone and make, or at least change to sudo -u alex
+# (will need to make sure makeDirectory makes dir's owned by alex)
+#-if  drive is mounted and it's tyhe right one, don;t throw an error
+#-add ${NORMAL_TEXT} to the end of all echo's
+#-change ${HOME} to a better location for log files
+#-do a proper job of the "sudo chown -R alex:alex /home/alex" I've put everywhere
+#-snapraid autogen is not working (exec seems to stop the reetting of script variables such as ERROR_TEXT_START though)
+#-snapraid building and configuring disabled until autogen fixed
+
+######Import common functions and constants
+commFuncFile="${HOME}/bin/commonfunctions"
+if $(sudo test -e "${commFuncFile}")
+then
+    echo "Loading ${commFuncFile}..."
+    . "${commFuncFile}"
+fi
+
+######Initialise Variables
+#grab sensitive values
+secretsFile="${HOME}/secrets/$(basename "${BASH_SOURCE}")_secrets"
+if $(sudo test -e "${secretsFile}")
+then
+    echo "Loading ${secretsFile}..."
+    . "${secretsFile}"
+fi
+
+declare -r PROG_NAME="makePool"
+declare -r PROG_VER="1.0"
+declare -r AUTHOR="Alex Wood"
+declare -r AUTHOR_EMAIL="alex@alex-wood.org.uk"
+declare -i appendFSTAB=${FALSE}
+declare -i checkDisks=${FALSE}
+declare fstabLocation=""
+declare -r POOL_FSTAB_REMOTE="${USER_HOME_DIR_REMOTE}/fstab.pool"
+#declare -r INDIVIDUAL_DRIVES_MOUNT_OPTIONS="defaults,nofail,dir_index,large_dir,journal_async_commit"
+declare -r INDIVIDUAL_DRIVES_MOUNT_OPTIONS="defaults"
+declare -r INDIVIDUAL_DRIVES_FILESYSTEM="ext4"
+declare -r POOL_FILESYSTEM_TYPE="fuse.mergerfs"
+declare -r MERGERFS_GIT_URL="git@github.com:trapexit/mergerfs.git"
+declare -r MERGERFS_GIT_DIR_LOCAL="${GIT_DIR_LOCAL}/mergerfs"
+declare -r MERGERFS_MOUNT_OPTIONS="defaults,direct_io,allow_other,category.create=mfs,moveonenospc=true,func.getattr=newest,use_ino,hard_remove,minfreespace=50G,fsname=mergerfs"
+declare -r MERGERFS_DRIVES_DIR="/mnt/individual_drives/data"
+declare -r SNAPRAID_PARITY_DRIVES_DIR_LOCAL="/mnt/individual_drives/parity"
+declare -r SNAPRAID_GIT_URL="git@github.com:amadvance/snapraid.git"
+declare -r SNAPRAID_GIT_DIR_LOCAL="${GIT_DIR_LOCAL}/snapraid"
+declare -a -r SNAPRAID_FILES_TO_COPY=( "${ETC_DIR_LOCAL}/snapraid.conf" ) #give local file names, but grabs from remote by prefixing ${REMOTE_MOUNTPOINT}
+declare -r SNAPRAID_RUNNER_GIT_URL="git@github.com:Chronial/snapraid-runner.git"
+declare -r SNAPRAID_RUNNER_GIT_DIR_LOCAL="${OPT_DIR_LOCAL}/snapraid-runner"
+declare -r SNAPRAID_BUILD_PREFIX_DIR_LOCAL="/usr"
+#declare -a -r SNAPRAID_FILES_TO_COPY=( "${ETC_DIR_LOCAL}/snapraid.conf" ) #give local file names, but grabs from remote by prefixing ${REMOTE_MOUNTPOINT}
+declare -a -r SNAPRAID_RUNNER_FILES_TO_COPY=( "${OPT_DIR_LOCAL}/snapraid-runner/snapraid-runner.conf" ) #give local file names, but grabs from remote by prefixing ${REMOTE_MOUNTPOINT}
+declare TEMP
+declare -r ERROR_UNKNOWN_ARGUMENT=3
+declare -r ERROR_GETOPT_ERROR=2
+declare -r ERROR_FSCK_FAILED=10
+declare -r ERROR_FSTAB_NOT_FOUND=20
+#declare -r ERROR_MOUNT_FAILED=31
+declare -r ERROR_GIT_FAILED=40
+declare -r ERROR_APT_FAILED=41
+declare -r ERROR_MAKE_FAILED=42
+declare -r ERROR_DPKG_FAILED=43
+declare -r ERROR_MERGERFS_FAILED=44
+declare -r ERROR_AUTOGEN_FAILED=45
+declare -r ERROR_CONFIGURE_FAILED=46
+declare -r ERROR_MAKE_CHECK_FAILED=47
+declare -r ERROR_MAKE_INSTALL_FAILED=48
+#declare -r ERROR_MOUNTED_WRONG_LOCATION=32
+#declare -r ERROR_WRONG_DEVICE_MOUNTED=33
+#declare -r ERROR_UNKNOWN_MOUNT_ERROR=34
+#declare -r ERROR_POOL_MOUNT_OCCUPIED=35
+declare arg=""
+declare -i total
+echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+
+
+##########Functions
+function showHelp()
+{
+    echo -e "${PROG_NAME} v${PROG_VER} by ${AUTHOR} (${AUTHOR_EMAIL})${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${WHITE_TEXT}USAGE${NORMAL_TEXT}\n\t${0} ${GREEN_TEXT}<options>${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${GREEN_TEXT}Options${NORMAL_TEXT}:"
+    echo -e "\t${BOLD}${WHITE_TEXT}--check  ${GREEN_TEXT}-c${NORMAL_TEXT} Check all Pool Drives before mounting (will exit on error)${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}--fstab= ${GREEN_TEXT}-f${NORMAL_TEXT} Append Pool mounts to FSTAB (Optional: FSTAB file location.  If not given ${DEFAULT_FSTAB_LOCATION_LOCAL} is assumed${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}--help   ${GREEN_TEXT}-h${NORMAL_TEXT} Display this help message${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${GREEN_TEXT}NOTE:${NORMAL_TEXT}:${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}This script uses getopt which only allows options in the forms:${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}--xxxx=blaaa or --xxxx='blaaa' or -xblaaa or -x'blaaa'${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${RED_TEXT}NOT IN THE FORMS:${WHITE_TEXT} --xxxx blaaa or -x blaaa or -x=blaaa${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${GREEN_TEXT}Examples:${NORMAL_TEXT}:"
+    echo -e "${0} ${GREEN_TEXT}-c${NORMAL_TEXT}\t\t\t\tMount Pool, but check drives first (will exit on error)${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}-f'/path/to/fstab'${NORMAL_TEXT}\tMount Pool and append FSTAB file located at /path/to/fstab${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}-f/path/to/fstab${NORMAL_TEXT}\t\tSame as above, but not as easy to read${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}--check -f${NORMAL_TEXT}\t\t\tFirst check drives and mount Pool if no errors,\n\t\t\t\t\t\t\t\tthen append FSTAB in default location of ${DEFAULT_FSTAB_LOCATION_LOCAL}${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}-fc${NORMAL_TEXT}\t\t\tSame as above${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}--fstab=/opt/fstab${NORMAL_TEXT}\t\tMount Pool and append FSTAB file located at /opt/fstab${NORMAL_TEXT}"
+}
+
+
+##########Parse Options and parameters (arguments)
+# Note that we use "$@" to let each command-line parameter expand to a
+# separate word. The quotes around "$@" are essential!
+# We need TEMP as the 'eval set --' would nuke the return value of getopt.
+#echo -e "${NORMAL_TEXT}${NORMAL_BACKGROUND}Clearing screen...${NORMAL_TEXT}${NORMAL_BACKGROUND}"
+#echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+#clear
+infoText "Main Code Start[${PROG_NAME} v${PROG_VER} by ${AUTHOR} (${AUTHOR_EMAIL})]" ${INFO_TEXT_MISC_NO_DOTS}
+
+TEMP=$(getopt -o 'chf::' --long 'check,help,fstab::' -n "'${PROG_NAME}'" -- "$@")
+retVal=$?
+if [ ${retVal} -ne 0 ]
+then
+    errorText "Parsing Arguments (getopt error code: [${retVal}])"
+    showHelp
+    exit ${ERROR_GETOPT_ERROR}
+fi
+
+# Note the quotes around "$TEMP": they are essential!
+#echo "TEMP: ${TEMP}"
+eval set -- "$TEMP"
+unset TEMP
+
+while true
+do
+    case "${1}" in
+        '-f'|'--fstab')
+#        -f|--fstab=*)
+            appendFSTAB=${TRUE}
+            # f has an optional argument. As we are in quoted mode,
+            # an empty parameter will be generated if its optional
+            # argument is not found.
+            case "${2}" in
+                '')
+                    #No file was give, assume default
+                    fstabLocation="${DEFAULT_FSTAB_LOCATION_LOCAL}"
+                    ;;
+                *)
+                    fstabLocation="${2}"
+                    ;;
+            esac
+            if ! $(sudo test -e "${fstabLocation}")
+            then
+                errorText "[${fstabLocation}] does not exist!"
+                exit ${ERROR_FSTAB_NOT_FOUND}
+            fi
+            #Me trying to do manually what getopt can do much better... I hope
+#            if [ "${1}" == "--fstab=*" ]
+#            then
+#                fstabLocation="${1#*=}"
+#            else
+#                fstabLocation="${2}"
+#                if [ "${2:1}" != "-" ]
+#                then
+#                    #No file was give, assume default
+#                    fstabLocation=""
+#                fi
+#            fi
+#            if [ "${fstabLocation}" == "" ]
+#            then
+#                fstabLocation=${DEFAULT_FSTAB_LOCATION_LOCAL}
+#            fi
+#            echo "fstab [${fstabLocation}]"
+            shift
+            ;;
+        '-c'|'--check')
+            checkDisks=${TRUE}
+            ;;
+        '-h'|'--help')
+            showHelp
+            exit 0
+            ;;
+        '--')
+            shift # The double dash which separates options from parameters
+            break
+            ;; # Exit the loop using break command
+        *)
+            errorText "Option [$1] not recognized"
+            showHelp
+            exit ${ERROR_UNKNOWN_ARGUMENT}
+            ;;
+    esac
+    shift
+done
+
+total=1
+#echo "@: ${@}"
+for param in ${@}
+do
+#    echo "#${total}: ${param}"
+    total=$((${total} + 1))
+done
+
+#a less intuative way of parsing arguments, but maybe easier to read bizarely
+total=1
+for arg
+do
+#    echo "#${total}: ${arg}"
+    total=$((${total} + 1))
+done
+#So parameters (ie arguments with just a value and not in the form -X or --XX)
+#are available from the usual string $@ with all options removed
+
+###########Main Code
+#echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+#clear
+#infoText "Main Code Start [${PROG_NAME}]" ${INFO_TEXT_MISC_NO_DOTS}
+##make sure we are running with admin rights
+#sudoCheck
+
+#make sure sda1 is mounted, as need it for snapraid files
+checkMount "${REMOTE_MOUNTPOINT}" "${REMOTE_DEVICE}"
+
+for drive in ${!poolDrives[@]}
+do
+    if $(sudo test -e "${drive}")
+    then
+        #I tend to use /dev/disk/by-id to get drives
+        #so make sure they are always of the form /dev/sdX
+        declare sdDrive="/dev/$(ls -al ${drive} | awk '{print $NF}' | awk -F/ '{print $NF}')"
+
+        if [ "${checkDisks}" == "${TRUE}" ]
+        then
+            if (( $(mount | grep "${sdDrive}" | wc -l) > 0 ))
+            then
+                #drive mounted, umount first
+                infoText "Unmounting [${sdDrive}] with path [${drive}]" ${INFO_TEXT_MISC}
+                runCommand "${ROOT_USER_NAME}" "umount '${sdDrive}'"
+            fi
+            infoText "Checking [${sdDrive}] with path [${drive}]" ${INFO_TEXT_MISC}
+            sudo fsck.ext4 -vvvfy "${sdDrive}"
+            retVal=$?
+
+            #The exit code returned by fsck is the sum of the following conditions:
+            # 0    - No errors
+            # 1    - File system errors corrected
+            # 2    - File system errors corrected, system should
+            #        be rebooted
+            # 4    - File system errors left uncorrected
+            # 8    - Operational error
+            # 16   - Usage or syntax error
+            # 32   - E2fsck canceled by user request
+            # 128  - Shared library error
+            #So anything below 4 should mean either no errors, or they where corrected
+            if (( ${retVal} > 3 ))
+            then
+                errorText "Drive [${drive}] (${sdDrive}) has uncorrectable errors (fsck returned error code: [${retVal}])"
+                exit ${ERROR_FSCK_FAILED}
+            fi
+        fi
+
+        mountDrive "${sdDrive}" "${poolDrives[${drive}]}" "${INDIVIDUAL_DRIVES_MOUNT_OPTIONS}" "${INDIVIDUAL_DRIVES_FILESYSTEM}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    else
+        errorText "Drive [${drive}] was not found.  It may have been disconnected.  Serial number is [$(basename ${poolDrives[${drive}]})]"
+        exit ${ERROR_DRIVE_MISSING}
+    fi
+done
+
+cd "${USER_HOME_DIR_LOCAL}"
+
+#######MergerFS stuff
+infoText "mergerfs into ${MERGERFS_GIT_DIR_LOCAL}" ${INFO_TEXT_DOWNLOAD}
+makeDirectory "${MERGERFS_GIT_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+git clone "${MERGERFS_GIT_URL}" "${MERGERFS_GIT_DIR_LOCAL}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to clone mergerfs in ${MERGERFS_GIT_DIR_LOCAL} (git returned error code: [${retVal}])"
+    exit ${ERROR_GIT_FAILED}
+fi
+cd "${MERGERFS_GIT_DIR_LOCAL}"
+declare logfile="${USER_INSTALLERS_DIR_LOCAL}/mergerfs-deps.log"
+infoText "mergerfs dependancies (log file: ${logfile})" ${INFO_TEXT_INSTALL}
+sudo tools/install-build-pkgs &> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to install mergerfs dependancies (apt returned error code: [${retVal}])"
+    exit ${ERROR_APT_FAILED}
+fi
+
+logfile="${USER_INSTALLERS_DIR_LOCAL}/mergerfs-build.log"
+infoText "mergerfs (log file: ${logfile})" ${INFO_TEXT_INSTALL}
+make deb &> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to build mergerfs. Review log at [${logfile}]. make returned error code: [${retVal}]"
+    exit ${ERROR_MAKE_FAILED}
+fi
+
+cd ..
+sudo dpkg -i mergerfs_*.deb &>>"${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to install mergerfs. Review log at [${logfile}]. dpkg returned error code: [${retVal}]"
+    exit ${ERROR_DPKG_FAILED}
+fi
+
+if ! $(sudo test -e "${POOL_MOUNTPOINT}")
+then
+    makeDirectory "${POOL_MOUNTPOINT}" "${DOCKERUSER_NAME}:${DOCKERGROUP_NAME}"
+fi
+###check to see if the pool is mounted
+mountpoint "${POOL_MOUNTPOINT}" &>/dev/null
+retVal=$?
+if (( ${retVal} == 0 ))
+then
+    ###somwthing is mounted here, see if it's the pool
+    if [ "$(mount | grep ${POOL_MOUNTPOINT} | awk '{print $5}')" != "${POOL_FILESYSTEM_TYPE}" ]
+    then
+        #It's not the pool, have to exit now as something important could be mounted here, so can;t umount it
+        errorText "Another device [$(mount | grep ${POOL_MOUNTPOINT} | awk '{print $1}')] is mount at the pool mount point [${POOL_MOUNTPOINT}], unable to continue as the mount could be important"
+        mount | grep "${POOL_MOUNTPOINT}"
+        exit ${ERROR_POOL_MOUNT_OCCUPIED}
+    else
+        #Yey, the pool is already mounted, it would appear
+        infoText "The pool appears to be already mounted at [${POOL_MOUNTPOINT}]" ${INFO_TEXT_MISC_NO_DOTS}
+        mount | grep "${POOL_MOUNTPOINT}"
+    fi
+else
+    #Nothing is mounted here, go ahead and mount
+    runCommand "${ROOT_USER_NAME}" "mergerfs -o ${MERGERFS_MOUNT_OPTIONS} '${MERGERFS_DRIVES_DIR}/*' '${POOL_MOUNTPOINT}'"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        errorText "Unable to mount Pool (mergerfs returned error code: [${retVal}])"
+        exit ${ERROR_MERGERFS_FAILED}
+    fi
+fi
+
+
+########snapraid stuff
+cd "${USER_HOME_DIR_LOCAL}"
+infoText "snapraid into ${SNAPRAID_GIT_DIR_LOCAL}" ${INFO_TEXT_DOWNLOAD}
+makeDirectory "${SNAPRAID_GIT_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+git clone --quiet "${SNAPRAID_GIT_URL}" "${SNAPRAID_GIT_DIR_LOCAL}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to clone snapraid in ${SNAPRAID_GIT_DIR_LOCAL} (git returned error code: [${retVal}])"
+    exit ${ERROR_GIT_FAILED}
+fi
+
+cd "${SNAPRAID_GIT_DIR_LOCAL}"
+logfile="${USER_INSTALLERS_DIR_LOCAL}/snapraid-build.log"
+infoText "Generating snapraid build scripts (Logging to ${logfile})" ${INFO_TEXT_MISC}
+${SNAPRAID_GIT_DIR_LOCAL}/autogen.sh &> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to generate snapraid configure and make scripts (autogen returned error code: [${retVal}])"
+    exit ${ERROR_AUTOGEN_FAILED}
+fi
+
+infoText "Configuring snapraid build scripts (Logging to ${logfile})" ${INFO_TEXT_MISC}
+./configure --prefix="${SNAPRAID_BUILD_PREFIX_DIR_LOCAL}" &>> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to pre-configure snapraid for build (configure returned error code: [${retVal}])"
+    exit ${ERROR_CONFIGURE_FAILED}
+fi
+
+infoText "Building snapraid (Logging to ${logfile})" ${INFO_TEXT_MISC}
+make -j4 &>> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to build snapraid (make returned error code: [${retVal}])"
+    exit ${ERROR_MAKE_FAILED}
+fi
+
+infoText "Checking snapraid executables (Logging to ${logfile})" ${INFO_TEXT_MISC}
+warnText "This can take a few minutes"
+make -j4 check &>> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Snapraid failed basic post make checks (make returned error code: [${retVal}])"
+    exit ${ERROR_MAKE_CHECK_FAILED}
+fi
+
+infoText "snapraid (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+sudo make install &>> "${logfile}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to install snapraid (make returned error code: [${retVal}])"
+    exit ${ERROR_MAKE_INSTALL_FAILED}
+fi
+
+infoText "snapraid config" ${INFO_TEXT_COPY}
+if (( ${#SNAPRAID_FILES_TO_COPY[@]}  > 0 ))
+then
+    for file in "${SNAPRAID_FILES_TO_COPY[@]}"
+    do
+        copyFile "${REMOTE_MOUNTPOINT}${file}" "${file}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    done
+fi
+
+#########snapraid-runner stuff
+cd "${USER_HOME_DIR_LOCAL}"
+infoText "snapraid-runner into ${SNAPRAID_RUNNER_GIT_DIR_LOCAL}" ${INFO_TEXT_DOWNLOAD}
+makeDirectory "${SNAPRAID_RUNNER_GIT_DIR_LOCAL}" "${USER_NAME}:${GROUP_NAME}"
+git clone --quiet "${SNAPRAID_RUNNER_GIT_URL}" "${SNAPRAID_RUNNER_GIT_DIR_LOCAL}"
+retVal=$?
+if [ "${retVal}" != "0" ]
+then
+    errorText "Unable to clone snapraid-runner in ${SNAPRAID_RUNNER_GIT_DIR_LOCAL} (git returned error code: [${retVal}])"
+    exit ${ERROR_GIT_FAILED}
+fi
+cd "${SNAPRAID_RUNNER_GIT_DIR_LOCAL}"
+
+infoText "snapraid-runner config" ${INFO_TEXT_COPY}
+if (( ${#SNAPRAID_RUNNER_FILES_TO_COPY[@]}  > 0 ))
+then
+    for file in "${SNAPRAID_RUNNER_FILES_TO_COPY[@]}"
+    do
+        copyFile "${REMOTE_MOUNTPOINT}${file}" "${file}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+    done
+fi
+
+linkFile "${ETC_DIR_LOCAL}/snapraid-runner.conf" "${OPT_DIR_LOCAL}/snapraid-runner/snapraid-runner.conf"
+
+
+infoText "Creating links for specific directories/files" ${INFO_TEXT_MISC}
+makeDirectory "/data" "${PLEX_USER_NAME}:${PLEX_USER_NAME}"
+linkFile "/data/tvshows" "${POOL_MOUNTPOINT}/TV"
+linkFile "/data/movies" "${POOL_MOUNTPOINT}/Movies"
+#sudo service plexmediaserver restart
+
+cd "${USER_HOME_DIR_LOCAL}"
+if [ "${appendFSTAB}" == "${TRUE}" ]
+then
+    infoText "The following has been added to your ${fstabLocation} file" ${INFO_TEXT_MISC_NO_DOTS}
+    appendToFile "${fstabLocation}" "$(cat ${POOL_FSTAB_REMOTE})"
+fi

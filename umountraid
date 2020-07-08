@@ -1,0 +1,34 @@
+function stopService () {
+echo "Stopping $1..."
+sudo service $1 stop
+if [ "$?" != "0" ]
+then
+    echo "ERROR: failed to stop $1 service"
+fi
+}
+
+stopService plexmediaserver
+cd /home/alex/docker-compose-scripts/TheMatrix
+docker-compose stop
+docker volume prune -f
+xpra stop
+stopService docker
+stopService deluged
+stopService delugeweb
+stopService smbd
+stopService nfs-kernel-server
+stopService tftpd-hpa
+stopService grafana-server
+stopService influxdb
+stopService kapacitor
+stopService chronograf
+stopService mysql
+echo "unmounting ext4-data ..."
+sudo umount /mnt/ext4-data
+if [ "$?" != "0" ]
+then
+   echo "ERROR: Failed to unmount raid"
+   sudo lsof /mnt/ext4-data
+fi
+#echo "Stopping Raid ..."
+mount | grep -i md0
