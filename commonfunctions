@@ -842,9 +842,15 @@ function appendToFile()
 
 function sudoCheck()
 {
+    if (( $(id -u) == 0 ))
+    then
+        errorText "Script executed with sudo.  Please run this script WITHOUT using sudo but as either as an admin user.  This script with use sudo by itself when required, and sometimes won't use it if it creates unpredictable output."
+        exit ${ERROR_NO_SUDO}
+    fi
+
     if (( $(sudo id -u) != 0 ))
     then
-        errorText "Unable to acheive sudo control.  Please run this script either as an admin user, a user with sudo powers or just with sudo (i.e sudo $0).  As this script has to change system files to set up your system"
+        errorText "Unable to acheive sudo control.  Please run this script either as an admin user, a user with sudo powers.  As this script has to change system files to set up your system.  DO NOT run this script with sudo."
         exit ${ERROR_NO_SUDO}
     fi
 }

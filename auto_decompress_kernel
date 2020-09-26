@@ -1,0 +1,115 @@
+#!/usr/bin/env -S bash -e
+
+#Set Variables 
+BOOT_PATH=/boot/firmware 
+COMPRESSED_KERNEL_PATH="${BOOT_PATH}/vmlinuz"
+DECOMPRESSED_KERNEL_PATH="${BOOT_PATH}/vmlinux"
+HASH_FILE_PATH="${BOOT_PATH}/kernel_hashes.md5"
+
+#CONSTANTS
+declare -r NORMAL_TEXT="$(tput sgr0)" &>/dev/null # No Color
+declare -r NORMAL_BACKGROUND="$(tput setab 9)" &>/dev/null
+declare -r RED_TEXT="$(tput setaf 1)" &>/dev/null
+declare -r WHITE_TEXT="$(tput setaf 7)" &>/dev/null
+declare -r GREEN_TEXT="$(tput setaf 2)" &>/dev/null
+declare -r BLUE_TEXT="$(tput setaf 4)" &>/dev/null
+declare -r BLACK_TEXT="$(tput setaf 0)" &>/dev/null
+declare -r YELLOW_TEXT="$(tput setaf 3)" &>/dev/null
+declare -r MAGENTA_TEXT="$(tput setaf 5)" &>/dev/null
+declare -r CYAN_TEXT="$(tput setaf 6)" &>/dev/null
+declare -r WHITE_BACKGROUND="$(tput setab 7)" &>/dev/null
+declare -r RED_BACKGROUND="$(tput setab 1)" &>/dev/null
+declare -r GREEN_BACKGROUND="$(tput setab 2)" &>/dev/null
+declare -r BLUE_BACKGROUND="$(tput setab 4)" &>/dev/null
+declare -r YELLOW_BACKGROUND="$(tput setab 3)" &>/dev/null
+declare -r MAGENTA_BACKGROUND="$(tput setab 5)" &>/dev/null
+declare -r CYAN_BACKGROUND="$(tput setab 6)" &>/dev/null
+declare -r BLACK_BACKGROUND="$(tput setab 0)" &>/dev/null
+declare -r BLINK="$(tput blink)" &>/dev/null
+declare -r INVERT="$(tput rev)" &>/dev/null
+declare -r BOLD="$(tput bold)" &>/dev/null
+declare -r UNDERLINE="$(tput smul)" &>/dev/null
+declare -r STANDOUT="$(tput smso)" &>/dev/null
+declare -r CLEAR_LINE="\033[2K"
+declare -r ERROR_BLINK_TEXT=${NORMAL_TEXT}${RED_BACKGROUND}${WHITE_TEXT}${BLINK}${BOLD} &>/dev/null
+declare -r ERROR_NORMAL_TEXT=${NORMAL_TEXT}${RED_TEXT}${BOLD} &>/dev/null
+declare -r OK_BOLD_TEXT=${NORMAL_TEXT}${GREEN_BACKGROUND}${BLUE_TEXT}${BOLD} &>/dev/null
+declare -r OK_NORMAL_TEXT=${NORMAL_TEXT}${GREEN_TEXT}${BOLD} &>/dev/null
+declare -r ERROR_TEXT_START="${ERROR_BLINK_TEXT}ERROR${ERROR_NORMAL_TEXT}: " &>/dev/null
+declare -r WARNING_TEXT_START="${BLUE_BACKGROUND}${WHITE_TEXT}${BOLD}${BLINK}WARNING${NORMAL_TEXT}: " &>/dev/null
+declare -r INFO_TEXT_START="${YELLOW_BACKGROUND}${BLUE_TEXT}${BOLD}${BLINK}INFO${NORMAL_TEXT}: " &>/dev/null
+
+#FUNCTIONS
+function errorText ()
+{
+    local msgText="${1}"
+
+    printf "${ERROR_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+
+function warnText ()
+{
+    local msgText="${1}"
+
+    printf "${WARNING_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+function infoText ()
+{
+    local msgText="${1}"
+
+    printf "${INFO_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+#MAIN CODE
+infoText "Checking for updates to kernel:\nCompressed kernel location: [${COMPRESSED_KERNEL_PATH}]\nDecompressed kernel location: [${DECOMPRESSED_KERNEL_PATH}]\n..."
+
+#Check if compression needs to be done. 
+if [ -e "${BOOT_PATH}/check.md5" ]
+then
+   if md5sum --status --ignore-missing -c "${BOOT_PATH}/check.md5"
+   then
+      infoText "Kernel files have not changed, decompression not required!\nScript completed successfully."
+      exit 0  
+   else 
+      warnText "Hash of kernel files failed, new kernel detected - decompressing..."
+   fi 
+fi
+
+#Backup the old decompressed kernel
+infoText "Backing up old decompressed kernel: [${DECOMPRESSED_KERNEL_PATH}] -> [${DECOMPRESSED_KERNEL_PATH}.bak]..."
+sudo mv "${DECOMPRESSED_KERNEL_PATH}" "${DECOMPRESSED_KERNEL_PATH}.bak"
+if [ ! $? == 0 ]
+then
+   errorText "BACKUP OF DECOMPRESSED KERNEL FAILED! YOU MUST HAVE SUDO PRIVILEGES!"
+   exit 1 
+else  
+   infoText "Backup of decompressed kernel was successful..."
+fi
+
+#Decompress the new kernel 
+infoText "Decompressing kernel: [${COMPRESSED_KERNEL_PATH}]..."  
+zcat "${COMPRESSED_KERNEL_PATH}" | sudo tee "${DECOMPRESSED_KERNEL_PATH}" > /dev/null
+if [ ! $? == 0 ]
+then
+   errorText "KERNEL FAILED TO DECOMPRESS! YOU MUST HAVE SUDO PRIVILEGES!"
+   exit 1
+else  
+   infoText "Kernel decompressed succesfully..." 
+fi  
+
+#Hash the new kernel for checking
+infoText "Generating hashes for new kernels in file [${HASH_FILE_PATH}]..."
+md5sum "${COMPRESSED_KERNEL_PATH}" "${DECOMPRESSED_KERNEL_PATH}" | sudo tee "${HASH_FILE_PATH}"
+if [ ! $? == 0 ]
+then
+   errorText "MD5 GENERATION FAILED! YOU MUST HAVE SUDO PRIVILEGES!"
+   exit 1 
+else 
+   infoText "MD5 generated succesfully..."
+fi
+
+#Exit
+infoText "Script completed successfully!"
+exit 0

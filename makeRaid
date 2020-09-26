@@ -1,4 +1,77 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#####TODO
+#-make filesnames copied over from sda definable constants
+#-make all locations copied to definable constants
+#-ubuntu 19.04 comes with mdadm 4.1, so check installed version before downloading
+#-also it seems to generate it's own mdadm.conf, should we use or not?
+#-diagnostic code moved to createOverlays.  Need to do all the redirects again.  Also remember it messed up sda
+# mount, so be careful
+#-EVERYTHING
+
+######Import common functions and constants
+commFuncFile="${HOME}/bin/commonfunctions"
+if $(sudo test -e "${commFuncFile}")
+then
+    echo "Loading ${commFuncFile}..."
+    . "${commFuncFile}"
+fi
+
+######Initialise Variables
+#grab sensitive values
+secretsFile="${HOME}/secrets/$(basename "${BASH_SOURCE}")_secrets"
+if $(sudo test -e "${secretsFile}")
+then
+    echo "Loading ${secretsFile}..."
+    . "${secretsFile}"
+fi
+
+declare -r MDADM_VER="4.1"
+declare -r MDADM_CONFIG_FILE_REMOTE="${ETC_DIR_REMOTE}/mdadm/mdadm.conf"
+declare -r MDADM_CONFIG_FILE_LOCAL="${ETC_DIR_LOCAL}/mdadm/mdadm.conf"
+declare -r RAID_FSTAB_REMOTE="${USER_HOME_DIR_REMOTE}/fstab.raid"
+declare -r READ_ONLY_MOUNT="ro"
+declare -r READ_WRITE_MOUNT="rw"
+declare driveMountMode=${READ_ONLY_MOUNT}
+declare -i appendFSTAB="${FALSE}"
+declare fstabLocation=""
+declare -r PROG_NAME="makeRaid"
+declare -r PROG_VER="1.0"
+declare -r AUTHOR="Alex Wood"
+declare -r AUTHOR_EMAIL="alex@alex-wood.org.uk"
+echo -e "${BLACK_BACKGROUND}${WHITE_TEXT}   "
+
+
+#####Functions
+function createOverlays()
+{
+    UUID=$(sudo mdadm -E /dev/sdi|perl -ne '/Array UUID : (\S+)/ and print $1')
+    DEVICES=$(cat /proc/partitions | parallel --tagstring {5} --colsep ' +' sudo mdadm -E /dev/{5} |grep $UUID | parallel --colsep '\t' echo /dev/{1})
+    infoText "UUID: ${UUID}" ${INFO_TEXT_MISC_NO_DOTS}
+    infoText "DEVICES: ${DEVICES}" ${INFO_TEXT_MISC_NO_DOTS}
+    parallel 'test -e /dev/loop{#} || mknod -m 660 /dev/loop{#} b 7 {#}' ::: $DEVICES
+    parallel truncate -s4000G overlay-{/} ::: $DEVICES
+    parallel 'size=$(sudo blockdev --getsize {}); loop=$(sudo losetup -f --show -- overlay-{/}); echo 0 $size snapshot {} $loop P 8 | sudo dmsetup create {/}' ::: $DEVICES
+    OVERLAYS=$(parallel echo /dev/mapper/{/} ::: $DEVICES)
+    infoText "OVERLAYS: ${OVERLAYS}" ${INFO_TEXT_MISCNO_DOTS}
+    sudo dmsetup status
+    parallel --tag -k sudo mdadm -E ::: $OVERLAYS|grep -E 'Update'
+    parallel --tag -k sudo mdadm -E ::: $OVERLAYS|grep -E 'Role'
+    # this will start to assemble the arrays with the overlays in place, then pause the assembly to remove the overlays
+    # (otherwize they will fill up your system drive) then continue on with just the bare drives
+    # once they have been added back as spares.  Note we are usiong md1 so as not to confuse with the original md0
+    #sudo mdadm --assemble --force /dev/md1 $OVERLAYS
+    #echo 0 | sudo tee /proc/sys/dev/raid/speed_limit_max
+    #echo 0 | sudo tee /proc/sys/dev/raid/speed_limit_min
+    #parallel -j1 sudo mdadm --add /dev/md1 ::: $OVERLAY
+    #cat /proc/mdstat
+    #sudo mdadm --stop /dev/md1
+    #sudo mdadm --assemble /dev/md1
+
+    read -p "${INFO_TEXT_START}Press Enter To Unmount Overlays${NORMAL_TEXT}"
+    ##undo
+    parallel 'sudo dmsetup remove {/}; rm overlay-{/}' ::: $DEVICES
+    parallel sudo losetup -d ::: /dev/loop[0-9]*
+}
 
 function overlay_create ()
 {
@@ -25,364 +98,326 @@ function overlay_remove ()
 {
         for d in $DEVICES; do
                 b=$(basename /dev/$d)
-                [ -e /dev/mapper/$b ] && sudo dmsetup remove $b && echo /dev/mapper/$b 
-                if [ -e $b.ovr ]; then
+                $(sudo test -e /dev/mapper/$b) && sudo dmsetup remove $b && echo /dev/mapper/$b 
+                if $(sudo test -e $b.ovr )
+                then
                         echo $b.ovr
                         l=$(sudo losetup -j $b.ovr | cut -d : -f1)
                         echo $l
-                        [ -n "$l" ] && sudo losetup -d $(sudo losetup -j $b.ovr | cut -d : -f1)
+                        $(sudo test -n "$l") && sudo losetup -d $(sudo losetup -j $b.ovr | cut -d : -f1)
                         rm -f $b.ovr &> /dev/null
                 fi
         done
 }
 
-sudo adduser alex
-sudo usermod alex -aG sudo,adm
-sudo adduser --group dockergroup
-sudo groupmod --gid 1050 dockergroup
-sudo adduser dockeruser --uid 1050 --ingroup dockergroup
-sudo cp /mnt/sda/home/alex/fstab.temp /etc/fstab
-sudo cp /mnt/sda/home/alex/sudoers.temp /etc/sudoers.d/alex
-sudo mkdir -p /etc/systemd/system/wsdd.service.d
-sudo cp /mnt/sda/home/alex/wsdd-override.temp /etc/systemd/system/wsdd.service.d/override.conf
-sudo cp /mnt/sda/etc/apt/sources.list.d/* /etc/apt/sources.list.d/
-sudo cp /mnt/sda/etc/apt/trusted.gpg.d/* /etc/apt/trusted.gpg.d/
-curl https://packages.grafana.com/gpg.key | sudo apt-key add -
-curl http://www.webmin.com/jcameron-key.asc | sudo apt-key add -
-curl https://deb.torproject.org/torproject.org/A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89.asc | gpg --import
-gpg --export A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89 | sudo apt-key add -
-curl https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-curl https://doozer.io/keys/tvheadend/tvheadend/pgp | sudo apt-key add -
-curl https://mkvtoolnix.download/gpg-pub-moritzbunkus.txt | sudo apt-key add -
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-curl https://bacula.org/downloads/baculum/baculum.pub | sudo apt-key add -
-curl https://www.virtualbox.org/download/oracle_vbox_2016.asc | sudo apt-key add -
-curl https://xpra.org/gpg.asc | sudo apt-key add -
-curl https://dl.winehq.org/wine-builds/winehq.key | sudo apt-key add -
-curl http://hwraid.le-vert.net/ubuntu/hwraid.le-vert.net.gpg.key | sudo apt-key add -
-curl -sSL https://deb.nodesource.com/gpgkey/nodesource.gpg.key | sudo apt-key add -
-curl -sL https://repos.influxdata.com/influxdb.key | sudo apt-key add -
+function showHelp()
+{
+    echo -e "${PROG_NAME} v${PROG_VER} by ${AUTHOR} (${AUTHOR_EMAIL})${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${WHITE_TEXT}USAGE${NORMAL_TEXT}\n\t${0} ${GREEN_TEXT}<options>${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${GREEN_TEXT}Options${NORMAL_TEXT}:"
+    echo -e "\t${BOLD}${WHITE_TEXT}--writable ${GREEN_TEXT}-w${NORMAL_TEXT} Mount the RAID Array in Writable mode (Default is Read-Only)${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}--fstab=   ${GREEN_TEXT}-f${NORMAL_TEXT} Append RAID mount to FSTAB (Optional: FSTAB file location.  If not given ${DEFAULT_FSTAB_LOCATION_LOCAL} is assumed${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}--help     ${GREEN_TEXT}-h${NORMAL_TEXT} Display this help message${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${GREEN_TEXT}NOTE:${NORMAL_TEXT}:${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}This script uses getopt which only allows options in the forms:${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${WHITE_TEXT}--xxxx=blaaa or --xxxx='blaaa' or -xblaaa or -x'blaaa'${NORMAL_TEXT}"
+    echo -e "\t${BOLD}${RED_TEXT}NOT IN THE FORMS:${WHITE_TEXT} --xxxx blaaa or -x blaaa or -x=blaaa${NORMAL_TEXT}"
+    echo -e "${INVERT}${BOLD}${GREEN_TEXT}Examples:${NORMAL_TEXT}:"
+    echo -e "${0} ${GREEN_TEXT}-w${NORMAL_TEXT}\t\t\t\tMount RAID writable so files can be copied/moved/deleted from/to it${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}-f'/path/to/fstab'${NORMAL_TEXT}\tMount RAID Read-Only and append FSTAB file located at /path/to/fstab${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}-f/path/to/fstab${NORMAL_TEXT}\t\tSame as above, but not as easy to read${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}--writable -f${NORMAL_TEXT}\t\t\tMount RAID, then append FSTAB in default location of ${DEFAULT_FSTAB_LOCATION_LOCAL}${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}-fw${NORMAL_TEXT}\t\t\tSame as above${NORMAL_TEXT}"
+    echo -e "${0} ${GREEN_TEXT}--fstab=/opt/fstab${NORMAL_TEXT}\t\tMount RAID Read-Only and append FSTAB file located at /opt/fstab${NORMAL_TEXT}"
+}
 
-sudo add-apt-repository --yes ppa:mamarley/tvheadend-git-stable
-sudo cp /mnt/sda/home/alex/.bash_aliases ~/
-. ~/.bash_aliases
-sudo visudo
 
-sudo mkdir -p /mnt/individual_drives/parity/4TBTO-5430A00IFV94
-sudo mkdir -p /mnt/individual_drives/parity/4TBTO-85S0A00HFVL8
-sudo mkdir -p /mnt/individual_drives/parity/4TBWD-WMC1F0D3F3U5
-sudo mkdir -p /mnt/individual_drives/parity/4TBWD-WMC1F0F4D47N
-sudo mkdir -p /mnt/individual_drives/parity/4TBWD-WMC1F0D76X01
-sudo mkdir -p /mnt/individual_drives/parity/4TBTO-25E0A02YFVL8
-sudo mkdir -p /mnt/individual_drives/data/12TBWD-8DGEPWHY
-sudo mkdir -p /mnt/individual_drives/data/12TBWD-8DGESZBH
-sudo mkdir -p /mnt/individual_drives/data/10TBWD-1SHUW6TZ
-sudo mkdir -p /mnt/individual_drives/data/10TBWD-1SHV2XKZ
-sudo mkdir -p /mnt/individual_drives/data/4TBTO-25E0A02QFVL8
-sudo mkdir -p /mnt/individual_drives/data/4TBWD-WMC1F0092903
-sudo mkdir -p /mnt/individual_drives/data/4TBTO-25E0A02WFVL8
-sudo mkdir -p /mnt/individual_drives/data/4TBTO-85B0A00NFVL8
-sudo mkdir -p /mnt/videopool
-sudo mkdir -p /mnt/ext4-data
-
-if [ "$(grep -lx "deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc) universe" /etc/apt/sources.list)" != "/etc/apt/sources.list" ]
+##########Parse Options and parameters (arguments)
+# Note that we use "$@" to let each command-line parameter expand to a
+# separate word. The quotes around "$@" are essential!
+# We need TEMP as the 'eval set --' would nuke the return value of getopt.
+TEMP=$(getopt -o 'whf::' --long 'writable,help,fstab::' -n "'${PROG_NAME}'" -- "$@")
+retVal=$?
+if [ ${retVal} -ne 0 ]
 then
-    echo deb http://gb.archive.ubuntu.com/ubuntu/ $(lsb_release -sc) universe | sudo tee -a /etc/apt/sources.list
+    errorText "Parsing Arguments (getopt error code: [${retVal}])"
+    showHelp
+    exit ${ERROR_GETOPT_ERROR}
 fi
-if [ "$(grep -lx "deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates universe" /etc/apt/sources.list)" != "/etc/apt/sources.list" ]
+
+# Note the quotes around "$TEMP": they are essential!
+#echo "TEMP: ${TEMP}"
+eval set -- "$TEMP"
+unset TEMP
+
+while true
+do
+    case "${1}" in
+        '-f'|'--fstab')
+            appendFSTAB=${TRUE}
+            # f has an optional argument. As we are in quoted mode,
+            # an empty parameter will be generated if its optional
+            # argument is not found.
+            case "${2}" in
+                '')
+                    #No file was give, assume default
+                    fstabLocation="${DEFAULT_FSTAB_LOCATION_LOCAL}"
+                    ;;
+                *)
+                    fstabLocation="${2}"
+                    ;;
+            esac
+            if ! $(sudo test -e "${fstabLocation}")
+            then
+                errorText "[${fstabLocation}] does not exist!"
+                exit ${ERROR_FSTAB_NOT_FOUND}
+            fi
+            shift
+            ;;
+        '-w'|'--writable')
+            driveMountMode=${READ_WRITE_MOUNT}
+            ;;
+        '-h'|'--help')
+            showHelp
+            exit 0
+            ;;
+        '--')
+            shift # The double dash which separates options from parameters
+            break
+            ;; # Exit the loop using break command
+        *)
+            errorText "Option [$1] not recognized"
+            showHelp
+            exit ${ERROR_UNKNOWN_ARGUMENT}
+            ;;
+    esac
+    shift
+done
+
+
+###############MAIN CODE
+#echo -e "${NORMAL_TEXT}${NORMAL_BACKGROUND}Clearing screen...${NORMAL_TEXT}${NORMAL_BACKGROUND}"
+#clear
+infoText "Main Code Start[${PROG_NAME} v${PROG_VER} by ${AUTHOR} (${AUTHOR_EMAIL})]" ${INFO_TEXT_MISC_NO_DOTS}
+#make sure sda1 is mounted, as need it for snapraid files
+checkMount "${REMOTE_MOUNTPOINT}" "${REMOTE_DEVICE}"
+
+###disable services that may get in the way of mounting and assembling the RAID
+for service in ${SERVICES_TO_HOLD_UNTIL_RAID_MOUNTED[@]}
+do
+    infoText "Disabling [${service}] as it may interfere with RAID assembly and mounting" ${INFO_TEXT_MISC}
+    runCommand "${ROOT_USER_NAME}" "systemctl stop ${service}"
+    runCommand "${ROOT_USER_NAME}" "systemctl disable ${service}"
+done
+
+infoText "Unmounting and stopping any exiting RAID device named [${RAID_DEVICE}]" ${INFO_TEXT_MISC}
+sudo umount "${RAID_DEVICE}" 2>/dev/null
+sudo mdadm --misc "${RAID_DEVICE}" --stop 2>/dev/null
+
+infoText "RAID config" ${INFO_TEXT_COPY}
+copyFile "${MDADM_CONFIG_FILE_REMOTE}" "${MDADM_CONFIG_FILE_LOCAL}" "${FALSE}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+#if ! $(sudo test -e ${RAID_MOUNTPOINT})
+#then
+#    makeDirectory "${RAID_MOUNTPOINT}" "${DOCKERUSER_NAME}:${DOCKERGROUP_NAME}"
+#fi
+
+###use mdadm --version and ${MDADM_VER} to see if we should download and install
+### bloody mdadm --version can not be processed by anything, tried awk, tr, cut, >tempfile and still no joy
+### so just see what is already installed (it's installed by default on server, but NOT desktop)
+##'if mdadm is installed via apt, it will instantly try and assemble the array, and get stuck on the reshape....
+if (( $(echo "$(apt-cache policy mdadm | grep Installed | awk '{print $2}' | awk 'BEGIN{FS="-"}; {print $1}') < ${MDADM_VER}" | bc -l) ))
 then
-    echo deb http://gb.archive.ubuntu.com/ubuntu/ $(lsb_release -sc)-updates universe | sudo tee -a /etc/apt/sources.list
+    infoText "mdadm" ${INFO_TEXT_INSTALL}
+    cd "${USER_INSTALLERS_DIR_LOCAL}"
+    download "https://mirrors.edge.kernel.org/pub/linux/utils/raid/mdadm/mdadm-${MDADM_VER}.tar.gz" "mdadm-${MDADM_VER}.tar.gz"
+    #makeDirectory "mdadm-${MDADM_VER}" "${USER_NAME}:${GROUP_NAME}"
+    runCommand "${USER_NAME}" "tar xf mdadm-${MDADM_VER}.tar.gz"
+    cd "mdadm-${MDADM_VER}"
+    make &>"{logfile}"
+    sudo make install &>>"{logfile}"
+    cd "${USER_HOME_DIR_LOCAL}"
 fi
-if [ "$(grep -lx "deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc) multiverse" /etc/apt/sources.list)" != "/etc/apt/sources.list" ]
+
+if [ "${driveMountMode}" == "${READ_ONLY_MOUNT}" ]
 then
-    echo deb http://gb.archive.ubuntu.com/ubuntu/ $(lsb_release -sc) multiverse | sudo tee -a /etc/apt/sources.list
-fi
-if [ "$(grep -lx "deb http://gb.archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates multiverse" /etc/apt/sources.list)" != "/etc/apt/sources.list" ]
+    infoText "Assembling RAID (READ-ONLY)" ${INFO_TEXT_MISC}
+    #don't check the exit code of this, as it returns an error if it is already assembled
+    sudo mdadm --assemble --readonly --scan
+    until grep -A1 "^${RAID_DEVICE#/dev/} :" /proc/mdstat | grep -q '\[UU*\]'
+    do
+        infoText "Waiting for RAID [${RAID_DEVICE#/dev/}] to assemble" ${INFO_TEXT_MISC}
+        cat /proc/mdstat
+        sleep 2
+    done
+    infoText "Mounting RAID [${RAID_DEVICE}] (READ-ONLY) at [${RAID_MOUNTPOINT}]" ${INFO_TEXT_MISC}
+    mountDrive "${RAID_DEVICE}" "${RAID_MOUNTPOINT}" "noload,ro" "${RAID_FILESYSTEM}" "${DOCKERUSER_NAME}:${DOCKERGROUP_NAME}"
+elif [ "${driveMountMode}" == "${READ_WRITE_MOUNT}" ]
 then
-    echo deb http://gb.archive.ubuntu.com/ubuntu/ $(lsb_release -sc)-updates multiverse | sudo tee -a /etc/apt/sources.list
+    infoText "Assembling RAID (WRITABLE)" ${INFO_TEXT_MISC}
+    #don't check the exit code of this, as it returns an error if it is already assembled
+    sudo mdadm --assemble --scan
+    until grep -A1 "^${RAID_DEVICE#/dev/} :" /proc/mdstat | grep -q '\[UU*\]'
+    do
+        infoText "Waiting for RAID [${RAID_DEVICE#/dev/}] to assemble" ${INFO_TEXT_MISC}
+        cat /proc/mdstat
+        sleep 2
+    done
+
+    infoText "Mounting RAID [${RAID_DEVICE}] (WRITABLE) at [${RAID_MOUNTPOINT}]" ${INFO_TEXT_MISC}
+    mountDrive "${RAID_DEVICE}" "${RAID_MOUNTPOINT}" "${DOCKERUSER_NAME}:${DOCKERGROUP_NAME}"
+
+    infoText "PlexMediaServer" ${INFO_TEXT_SETUP}
+	infoText "secondary groups to users" ${INFO_TEXT_ADD}
+	#to save having to chown the whole plex library (a long task) grab the uid and gid from the exisiting library and assign
+	runCommand "${ROOT_USER_NAME}" "usermod ${PLEX_USER_NAME} --uid $(ls -dn ${RAID_MOUNTPOINT}/appdata/plexdata | awk '{print $3}') -aG ${DOCKERGROUP_NAME}"
+	runCommand "${ROOT_USER_NAME}" "groupmod ${PLEX_USER_NAME} --gid $(ls -dn ${RAID_MOUNTPOINT}/appdata/plexdata | awk '{print $4}')"
+
+	if $(sudo test -e "${VAR_DIR_LOCAL}/lib/plexmediaserver")
+	then
+        if [[ $(stat ${VAR_DIR_LOCAL}/lib/plexmediaserver) != *"symbolic link"* ]]
+        then
+            infoText "Deleting ${VAR_DIR_LOCAL}/lib/plexmediaserver" ${INFO_TEXT_MISC}
+            deleteFile "${VAR_DIR_LOCAL}/lib/plexmediaserver"
+            linkFile "${VAR_DIR_LOCAL}/lib/plexmediaserver" "${RAID_MOUNTPOINT}/appdata/plexdata/"
+        fi
+    else
+		linkFile "${VAR_DIR_LOCAL}/lib/plexmediaserver" "${RAID_MOUNTPOINT}/appdata/plexdata/"
+    fi
+    #if it existed and wasn't a symlink then it was deleted, if it was a symlink it already has the right permissions
+    #as we changed the uid and gid above.  If it didn;t exist, that's where we need to eb in any case so we can create the link
+    #infoText "Plex Library File Permissions" ${INFO_TEXT_APPLY}
+	#runCommand "${ROOT_USER_NAME}" "chown -R ${PLEX_USER_NAME}:${PLEX_USER_NAME} '${VAR_DIR_LOCAL}/lib/plexmediaserver'"
+
+	#sudo chown -R ${PLEX_USER_NAME}:${PLEX_USER_NAME} "${RAID_MOUNTPOINT}/appdata/plexdata"
+	#sudo chown -R ${PLEX_USER_NAME}:${PLEX_USER_NAME} "${VAR_DIR_LOCAL}/lib/plexmediaserver"
+	#best done by make pool, as it's a pool dependancy
+    #makeDirectory "/data" "${PLEX_USER_NAME}:${PLEX_USER_NAME}"
+	#linkFile "/data/tvshows" "${POOL_MOUNTPOINT}/TV"
+	#linkFile "/data/movies" "${POOL_MOUNTPOINT}/Movies"
+
+    infoText "All set up, enabling and restarting services to pick up new config" ${INFO_TEXT_MISC}
+    for service in ${SERVICES_TO_HOLD_UNTIL_RAID_MOUNTED[@]}
+    do
+        infoText "Enabling [${service}]..." ${INFO_TEXT_MISC}
+        runCommand "${ROOT_USER_NAME}" "systemctl enable ${service}"
+        runCommand "${ROOT_USER_NAME}" "systemctl start ${service}"
+    done
+
+    restartServices
+
+    infoText "Downloading and Starting Docker Containers" ${INFO_TEXT_MISC}
+    #as we have write access, it's safe to start up the docker containers now
+    cd "${DOCKER_COMPOSE_SCRIPTS_DIR_LOCAL}"
+    ##tor gets in the way of tor-proxy
+    #runCommand "${ROOT_USER_NAME}" "systemctl disable tor"
+    #runCommand "${ROOT_USER_NAME}" "systemctl stop tor"
+    runCommand "${USER_NAME}" "docker-compose pull"
+    runCommand "${USER_NAME}" "docker-compose build --pull"
+    runCommand "${USER_NAME}" "docker-compose up -d"
+
+    infoText "Updating Boot Config" ${INFO_TEXT_MISC}
+    #the link file for renaming network interfaces under systemd happens
+    #very early in the boot cycle, so initramfs needs to be rebuilt with it in
+    runCommand "${ROOT_USER_NAME}" "update-initramfs -u"
 fi
-sudo apt update
-sudo apt install parallel git mdadm openssh-server build-essential samba tgt open-iscsi apt-transport-https ca-certificates curl gnupg-agent software-properties-common -y
-sudo cp /mnt/sda/etc/mdadm/mdadm.conf /etc/mdadm/
-sudo cp /mnt/sda/etc/samba/smb.conf /etc/samba/
-#sudo cp /mnt/sda/home/alex/tgt-targets.conf.temp /etc/tgt/tgt.conf
-sudo tgtadm --lld iscsi --op new --mode target --tid 1 -T iqn.2019-04.uk.org.alex-wood.bareubuntu:sda
-sudo tgtadm --lld iscsi --op new --mode logicalunit --tid 1 --lun 1 -b /dev/sda1
-sudo tgtadm --lld iscsi --op bind --mode target --tid 1 -I 192.168.32.0/24
-sudo tgt-admin --dump | sudo tee /etc/tgt/conf.d/sda
-sudo smbpasswd -a alex
-sudo service tgt restart
-sudo service smbd restart
 
-cd ~
-git clone https://github.com/trapexit/mergerfs.git
-cd mergerfs
-sudo tools/install-build-pkgs
-make deb
-cd ..
-sudo dpkg -i mergerfs_*.deb
+infoText "Increasing RAID speed" ${INFO_TEXT_MISC}
+sudo sysctl -w dev.raid.speed_limit_min=50000
+sudo sysctl -w dev.raid.speed_limit_max=5000000
+sudo blockdev --setra 65536 "${RAID_DEVICE}"
+echo "32768" | sudo tee /sys/block/${RAID_DEVICE##/dev/}/md/stripe_cache_size
+echo "deadline" | sudo tee /sys/block/${RAID_DEVICE##/dev/}/queue/scheduler
 
-sudo mount -a
-
-git clone https://github.com/christgau/wsdd
-sudo ln -s ~/wsdd/src/wsdd.py /usr/bin/wsdd
-sudo ln -s ~/wsdd/etc/systemd/wsdd.service /etc/systemd/system/wsdd.service
-sudo systemctl daemon-reload
-sudo system service wsdd start
-
-wget https://mirrors.edge.kernel.org/pub/linux/utils/raid/mdadm/mdadm-4.1.tar.gz
-tar xf mdadm-4.1.tar.gz
-cd mdadm-4.1
-make
-sudo make install
-cd ..
-
-sudo mdadm --assemble --scan --readonly
-sudo mount -o noload /dev/md0 /mnt/ext4-data
+infoText "RAID Info" ${INFO_TEXT_MISC}
 cat /proc/mdstat
+mount | grep "${RAID_DEVICE}"
+mdadm --version
+#weird that I pause only this script and not the others, but there is a lot of important
+#info happening here, and this is the last script
+read -p "Press return to continue..." i
+infoText "To Backup Copy and Paste This Block Of Code:" ${INFO_TEXT_MISC_NO_DOTS}
+echo -e "#CODE BLOCK START#" &&
+echo -e "RAID_MOUNTPOINT=\"<Location RAID is mounted eg /mnt/data>\" &&" &&
+echo -e "POOL_MOUNTPOINT=\"<Location Pool is mounted eg /mnt/pool>\" &&" &&
+echo -e "BACKUP_LOCATION=\"<Location on pool you want backups to go eg raid-backups>\" &&" &&
+echo -e "if \$(sudo test -e \"\${POOL_MOUNTPOINT}\")" &&
+echo -e "then" &&
+echo -e "  if ! \$(sudo test -e \"\${POOL_MOUNTPOINT}/\${BACKUP_LOCATION}\")" &&
+echo -e "  then" &&
+echo -e "      mkdir -p \"\${POOL_MOUNTPOINT}/\${BACKUP_LOCATION}\"" &&
+echo -e "  fi &&" &&
+echo -e "  for directory in \"\${RAID_MOUNTPOINT}\"/*" &&
+echo -e "  do" &&
+echo -e "    directoryName=\"$(basename \"\${directory}\")\" &&" &&
+echo -e "    dateString=\"$(date +\"%F_%H-%M-%S\")\" &&" &&
+echo -e "    backupFilename=\"\${POOL_MOUNTPOINT}/\${BACKUP_LOCATION}/\${directoryName}-backup-\${dateString}.tar.gz\" &&" &&
+echo -e "    if ! \$(sudo test -e \"\${backupFilename}\")" &&
+echo -e "    then" &&
+echo -e "        echo -en \"\\\\e[1;5;34;43mBacking up\\\\e[0m: [\${directory}] to \" &&" &&
+echo -e "          echo -e \"[\${backupFilename}]...\" &&" &&
+#echo -e "        sudo tar --exclude=\"${RAID_MOUNTPOINT}/Backups/MAIN-PC\" \\" &&
+echo -e "        sudo tar --exclude=\"${RAID_MOUNTPOINT}/Backups/MAIN-PC\" \\" &&
+echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Backups/Config\" \\" &&
+echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Backups/MAIN-PC\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Pictures\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Newsgroups\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Music\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Karaoke\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/ISOs\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Downloads\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Docs\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Comics\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Books\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Backups\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/Audiobooks\" \\" &&
+#echo -e "          --exclude=\"${RAID_MOUNTPOINT}/\\\$RECYCLE.BIN\" \\" &&
+#echo -e "          -cpvzf \"\${BACKUP_LOCATION}/\$(basename \"\${directory}\")-backup.tar.gz\" \"\${directory}\" \\" &&
+echo -e "          -cpf - \"\${directory}\" | pv -F \"%N %b %t Cur%r Avg%a %p ETA:%e\" -s \$(du -sb \"\${directory}\" \\" &&
+echo -e "            | awk '{print \$1}') | gzip > \"\${backupFilename}\"" &&
+echo -e "    fi &&" &&
+echo -e "  done &&" &&
+echo -e "fi" &&
+echo -e "#CODE BLOCK END#"
 
-sudo umount /mnt/sda
-echo sudo iscsiadm -m node --login
-echo sudo mount /dev/sdb /mnt/sda
+infoText "To Restore Copy And Paste This Block Of Code (will not restore if a directory already exists at destination's root):" ${INFO_TEXT_MISC_NO_DOTS}
+echo -e "#CODE BLOCK START#" &&
+echo -e "RAID_MOUNTPOINT=\"<Location RAID is mounted eg /mnt/data>\" &&" &&
+echo -e "BACKUP_LOCATION=\"<Location RAID is mounted eg /mnt/pool/raid-backups>\" &&" &&
+echo -e "for backupFiles in \"\${BACKUP_LOCATION}/*.tar.gz" &&
+echo -e "do" &&
+echo -e "  if ! \$(sudo test -e \"${RAID_MOUNTPOINT}/\$(cut -d/ -f7 - <<<\${backupFiles%%-backup*.tar.gz})\")" &&
+echo -e "  then" &&
+echo -e "    echo -en \"\\\\e[1;5;34;43mRestoring\\\\e[0m: [\${backupFiles}] to \"" &&
+echo -e "     echo -e \"[${RAID_MOUNTPOINT}/\$(cut -d/ -f7 - <<<\${backupFiles%%-backup*.tar.gz})]...\"" &&
+echo -e "   sudo pv -F \"%N %b %t Cur%r Avg%a %p ETA:%e\" \"\${backupFiles}\" | sudo tar --extract --atime-preserve=replace\\"&&
+echo -e "      --preserve-permissions --same-owner --xattrs --check-links --strip-components=2 --ungzip \\" &&
+echo -e "      --directory=\"${RAID_MOUNTPOINT}\" \\" &&
+echo -e "      --file=-" &&
+echo -e "  fi" &&
+echo -e "done" &&
+echo -e "#CODE BLOCK END#"
 
-echo for directory in \/mnt\/ext4-data\/\*
-echo do
-echo     sudo tar --exclude=/mnt/ext4-data/Backups/MAIN-PC --exclude=/mnt/ext4-data/Backups/Config --exclude=/mnt/ext4-data/Audiobooks --exclude=/mnt/ext4-data/\$RECYCLE.BIN -cpvzf \"/mnt/videopool/raid/\$\(basename \$\{directory\}\)-backup.tar.gz\" \"\$\{directory\}\"
-echo done
-exit 0
+infoText "To Restore A SPECIFIC FOLDER/FILE Copy And Paste This Block Of Code (will not restore if a directory already exists at destination's root):" ${INFO_TEXT_MISC_NO_DOTS}
+echo -e "#CODE BLOCK START#" &&
+echo -e "backupFile=\"<Backup file, eg /mnt/pool/raid-backups/backup-2019-09-07_01-05.tar.gz>\" &&" &&
+echo -e "toExtract=\"<folder to extract without leading slash eg mnt/data/myapp>\" &&" &&
+echo -e "RAID_MOUNTPOINT=\"<RAID mountpoint eg /mnt/data>\" &&" &&
+echo -e "extractionRoot=\"\${RAID_MOUNTPOINT}/\$(cut -d/ -f7 - <<<\${backupFile%%-backup-*.tar.gz})\" &&" &&
+echo -e "echo -en \"\\\\e[1;5;34;43mRestoring\\\\e[0m: [\${toExtract##\${extractionRoot#/}/}] from \" &&" &&
+echo -e "  echo -e \"[\${backupFile}] to [\${extractionRoot}]...\" &&" &&
+echo -e "sudo pv -F \"%N %b %t Cur%r Avg%a %p ETA:%e\" \"\${backupFile}\" | sudo tar --extract --atime-preserve=replace \\" &&
+echo -e "  --preserve-permissions --same-owner --xattrs --check-links --strip-components=2 --ungzip \\" &&
+echo -e "  --directory=\"\${RAID_MOUNTPOINT}\" \\" &&
+echo -e "  --file=- \"\${toExtract}\"" &&
+echo -e "#CODE BLOCK END#"
+#sudo pv -F "%N %b %t Cur%r Avg%a %p ETA:%e" "/mnt/data/raid-backups/backup-2019-09-07_01-05.tar.gz" | sudo tar --extract --atime-preserve=replace --preserve-permissions --same-owner --xattrs --check-links --strip-components=2 --ungzip --directory="/mnt/data" --file=- mnt/data/apps/myapp
 
-UUID=$(sudo mdadm -E /dev/sdi|perl -ne '/Array UUID : (\S+)/ and print $1')
-DEVICES=$(cat /proc/partitions | parallel --tagstring {5} --colsep ' +' sudo mdadm -E /dev/{5} |grep $UUID | parallel --colsep '\t' echo /dev/{1})
-echo UUID: ${UUID}
-echo DEVICES: ${DEVICES}
-parallel 'test -e /dev/loop{#} || mknod -m 660 /dev/loop{#} b 7 {#}' ::: $DEVICES
-parallel truncate -s4000G overlay-{/} ::: $DEVICES
-parallel 'size=$(sudo blockdev --getsize {}); loop=$(sudo losetup -f --show -- overlay-{/}); echo 0 $size snapshot {} $loop P 8 | sudo dmsetup create {/}' ::: $DEVICES
-OVERLAYS=$(parallel echo /dev/mapper/{/} ::: $DEVICES)
-echo OVERLAYS: ${OVERLAYS}
-sudo dmsetup status
-parallel --tag -k sudo mdadm -E ::: $OVERLAYS|grep -E 'Update'
-parallel --tag -k sudo mdadm -E ::: $OVERLAYS|grep -E 'Role'
-# this will start to assemble the arrays with the overlays in place, then pause the assembly to remove the overlays
-# (otherwize they will fill up your system drive) then continue on with just the bare drives
-# once they have been added back as spares.  Note we are usiong md1 so as not to confuse with the original md0
-#sudo mdadm --assemble --force /dev/md1 $OVERLAYS
-#echo 0 | sudo tee /proc/sys/dev/raid/speed_limit_max
-#echo 0 | sudo tee /proc/sys/dev/raid/speed_limit_min
-#parallel -j1 sudo mdadm --add /dev/md1 ::: $OVERLAY
-#cat /proc/mdstat
-#sudo mdadm --stop /dev/md1
-#sudo mdadm --assemble /dev/md1
-
-##undo
-#parallel 'sudo dmsetup remove {/}; rm overlay-{/}' ::: $DEVICES
-#parallel sudo losetup -d ::: /dev/loop[0-9]*
-
-######mdadm --create --verbose /dev/md0 --uuid=5245ec79:6be76700:4cddf690:5f613e3a --chunk=512 --level=5 --raid-devices=5 <devices>
-
-#cat /proc/mdstat
-#Personalities : [raid6] [raid5] [raid4]
-#md0 : active (read-only) raid5 sdi[3] sdp[5](S) sdn[6] sdo[4] sdg[2] sdt[1]
-#      11720661504 blocks super 1.2 level 5, 512k chunk, algorithm 2 [5/5] [UUUUU]
-#        resync=PENDING
-#      bitmap: 23/30 pages [92KB], 65536KB chunk
-
-#sudo mdadm -E /dev/sd[ipnogt]
-#/dev/sdg:
-#          Magic : a92b4efc
-#        Version : 1.2
-#    Feature Map : 0x45
-#     Array UUID : 5245ec79:6be76700:4cddf690:5f613e3a
-#           Name : TheMatrix:0
-#  Creation Time : Sat Dec 24 01:10:02 2016
-#     Raid Level : raid5
-#   Raid Devices : 5
-#
-# Avail Dev Size : 7813775024 (3725.90 GiB 4000.65 GB)
-#     Array Size : 15627548672 (14903.59 GiB 16002.61 GB)
-#  Used Dev Size : 7813774336 (3725.90 GiB 4000.65 GB)
-#    Data Offset : 262144 sectors
-#     New Offset : 258048 sectors
-#   Super Offset : 8 sectors
-#          State : active
-#    Device UUID : c970b776:6609bc9a:bd720e0a:326104f0
-#
-#Internal Bitmap : 8 sectors from superblock
-#  Reshape pos'n : 10428905472 (9945.78 GiB 10679.20 GB)
-#  Delta Devices : 1 (4->5)
-#
-#    Update Time : Fri Apr 12 19:50:54 2019
-#  Bad Block Log : 512 entries available at offset 72 sectors
-#       Checksum : e535efd7 - correct
-#         Events : 2471060
-#
-#         Layout : left-symmetric
-#     Chunk Size : 512K
-#
-#   Device Role : Active device 2
-#   Array State : AAAAA ('A' == active, '.' == missing, 'R' == replacing)
-#/dev/sdi:
-#          Magic : a92b4efc
-#        Version : 1.2
-#    Feature Map : 0x45
-#     Array UUID : 5245ec79:6be76700:4cddf690:5f613e3a
-#           Name : TheMatrix:0
-#  Creation Time : Sat Dec 24 01:10:02 2016
-#     Raid Level : raid5
-#   Raid Devices : 5
-#
-# Avail Dev Size : 7813775024 (3725.90 GiB 4000.65 GB)
-#     Array Size : 15627548672 (14903.59 GiB 16002.61 GB)
-#  Used Dev Size : 7813774336 (3725.90 GiB 4000.65 GB)
-#    Data Offset : 262144 sectors
-#     New Offset : 258048 sectors
-#   Super Offset : 8 sectors
-#          State : active
-#    Device UUID : d741dffd:a5df2cb8:90374e87:cd3acc0a
-#
-#Internal Bitmap : 8 sectors from superblock
-#  Reshape pos'n : 10428905472 (9945.78 GiB 10679.20 GB)
-#  Delta Devices : 1 (4->5)
-#
-#    Update Time : Fri Apr 12 19:50:54 2019
-#  Bad Block Log : 512 entries available at offset 72 sectors
-#       Checksum : 21d63504 - correct
-#         Events : 2471060
-#
-#         Layout : left-symmetric
-#     Chunk Size : 512K
-#
-#   Device Role : Active device 0
-#   Array State : AAAAA ('A' == active, '.' == missing, 'R' == replacing)
-#/dev/sdn:
-#          Magic : a92b4efc
-#        Version : 1.2
-#    Feature Map : 0x45
-#     Array UUID : 5245ec79:6be76700:4cddf690:5f613e3a
-#           Name : TheMatrix:0
-#  Creation Time : Sat Dec 24 01:10:02 2016
-#     Raid Level : raid5
-#   Raid Devices : 5
-#
-# Avail Dev Size : 7813775024 (3725.90 GiB 4000.65 GB)
-#     Array Size : 15627548672 (14903.59 GiB 16002.61 GB)
-#  Used Dev Size : 7813774336 (3725.90 GiB 4000.65 GB)
-#    Data Offset : 262144 sectors
-#     New Offset : 258048 sectors
-#   Super Offset : 8 sectors
-#          State : active
-#    Device UUID : c3237171:ec0d616f:ec2e1b8d:0bcb280b
-#
-#Internal Bitmap : 8 sectors from superblock
-#  Reshape pos'n : 10428905472 (9945.78 GiB 10679.20 GB)
-#  Delta Devices : 1 (4->5)
-#
-#    Update Time : Fri Apr 12 19:50:54 2019
-#  Bad Block Log : 512 entries available at offset 24 sectors
-#       Checksum : 52c5ccab - correct
-#         Events : 2471060
-#
-#         Layout : left-symmetric
-#     Chunk Size : 512K
-#
-#   Device Role : Active device 4
-#   Array State : AAAAA ('A' == active, '.' == missing, 'R' == replacing)
-#/dev/sdo:
-#          Magic : a92b4efc
-#        Version : 1.2
-#    Feature Map : 0x4d
-#     Array UUID : 5245ec79:6be76700:4cddf690:5f613e3a
-#           Name : TheMatrix:0
-#  Creation Time : Sat Dec 24 01:10:02 2016
-#     Raid Level : raid5
-#   Raid Devices : 5
-#
-# Avail Dev Size : 7813775024 (3725.90 GiB 4000.65 GB)
-#     Array Size : 15627548672 (14903.59 GiB 16002.61 GB)
-#  Used Dev Size : 7813774336 (3725.90 GiB 4000.65 GB)
-#    Data Offset : 262144 sectors
-#     New Offset : 258048 sectors
-#   Super Offset : 8 sectors
-#          State : active
-#    Device UUID : a8f0afb2:129466fd:a7a62915:fd87a2e5
-#
-#Internal Bitmap : 8 sectors from superblock
-#  Reshape pos'n : 10428905472 (9945.78 GiB 10679.20 GB)
-#  Delta Devices : 1 (4->5)
-#
-#    Update Time : Fri Apr 12 19:50:54 2019
-#  Bad Block Log : 512 entries available at offset 24 sectors - bad blocks present.
-#       Checksum : 84925462 - correct
-#         Events : 2471060
-#
-#         Layout : left-symmetric
-#     Chunk Size : 512K
-#
-#   Device Role : Active device 3
-#   Array State : AAAAA ('A' == active, '.' == missing, 'R' == replacing)
-#/dev/sdp:
-#          Magic : a92b4efc
-#        Version : 1.2
-#    Feature Map : 0x45
-#     Array UUID : 5245ec79:6be76700:4cddf690:5f613e3a
-#           Name : TheMatrix:0
-#  Creation Time : Sat Dec 24 01:10:02 2016
-#     Raid Level : raid5
-#   Raid Devices : 5
-#
-# Avail Dev Size : 7813775024 (3725.90 GiB 4000.65 GB)
-#     Array Size : 15627548672 (14903.59 GiB 16002.61 GB)
-#  Used Dev Size : 7813774336 (3725.90 GiB 4000.65 GB)
-#    Data Offset : 262144 sectors
-#     New Offset : 258048 sectors
-#   Super Offset : 8 sectors
-#          State : active
-#    Device UUID : 8e4d4bf8:96f3fbd8:6115a4eb:3d6e1597
-#
-#Internal Bitmap : 8 sectors from superblock
-#  Reshape pos'n : 10428905472 (9945.78 GiB 10679.20 GB)
-#  Delta Devices : 1 (4->5)
-#
-#    Update Time : Fri Apr 12 15:01:28 2019
-#  Bad Block Log : 512 entries available at offset 24 sectors
-#       Checksum : 2db021e9 - correct
-#         Events : 2471059
-#
-#         Layout : left-symmetric
-#     Chunk Size : 512K
-#
-#   Device Role : spare
-#   Array State : AAAAA ('A' == active, '.' == missing, 'R' == replacing)
-#/dev/sdt:
-#          Magic : a92b4efc
-#        Version : 1.2
-#    Feature Map : 0x4d
-#     Array UUID : 5245ec79:6be76700:4cddf690:5f613e3a
-#           Name : TheMatrix:0
-#  Creation Time : Sat Dec 24 01:10:02 2016
-#     Raid Level : raid5
-#   Raid Devices : 5
-#
-# Avail Dev Size : 7813775024 (3725.90 GiB 4000.65 GB)
-#     Array Size : 15627548672 (14903.59 GiB 16002.61 GB)
-#  Used Dev Size : 7813774336 (3725.90 GiB 4000.65 GB)
-#    Data Offset : 262144 sectors
-#     New Offset : 258048 sectors
-#   Super Offset : 8 sectors
-#          State : active
-#    Device UUID : c825b0d1:9ffa98a6:e631ed68:afbc1421
-#
-#Internal Bitmap : 8 sectors from superblock
-#  Reshape pos'n : 10428905472 (9945.78 GiB 10679.20 GB)
-#  Delta Devices : 1 (4->5)
-#
-#    Update Time : Fri Apr 12 19:50:54 2019
-#  Bad Block Log : 512 entries available at offset 72 sectors - bad blocks present.
-#       Checksum : dbfab034 - correct
-#         Events : 2471060
-#
-#         Layout : left-symmetric
-#     Chunk Size : 512K
-#
-#   Device Role : Active device 1
-#   Array State : AAAAA ('A' == active, '.' == missing, 'R' == replacing)
+if [ "${appendFSTAB}" == "${TRUE}" ]
+then
+    echo -e "${OK_BOLD_TEXT}The following has been added to your ${fstabLocation} file${NORMAL_TEXT}"
+    appendToFile "${fstabLocation}" "$(cat ${RAID_FSTAB_REMOTE})"
+fi

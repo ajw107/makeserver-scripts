@@ -103,7 +103,7 @@ declare -r SMARTBULBS_HOME_DIR_LOCAL="/home/smartbulbs"
 declare -r SMARTBULBS_HOME_DIR_REMOTE="${REMOTE_MOUNTPOINT}${SMARTBULBS_HOME_DIR_LOCAL}"
 declare -a -r SMARTBULBS_HOME_FILES_TO_COPY=( "characteristics.json" "deviceProperties.json" "properties.json" ) #just filenames relative to ${SMARTBULBS_HOME_DIR_REMOTE}
 declare -a -r SMARTBULBS_HOME_DIRS_TO_COPY=(  ) #just directory names relative to ${SMARTBULBS_HOME_DIR_REMOTE}
-declare -a -r ETC_FILES_TO_COPY=( "bash_completion" "bash.bashrc" "nanorc" "Muttrc" "aliases" "aliases.db" "default/plexmediaserver" "default/smartmontools" "default/ssh" "default/tftpd-hpa" "exports" "hostname" "hosts" "mailname" "ntp.conf" "smartd.conf" "swapspace.conf" "systemd/system/apt-update.service" "systemd/system/apt-update.timer" "systemd/system/smartbulbserver.service" "systemd/system/tplinkSmartAppServer.service" "udev/rules.d/40-uinput.rules" "udev/rules.d/70-persistent-net.rules" "udev/rules.d/99-usb-serial.rules" "watchdog.conf" "default/watchdog" "systemd/system/docker.service.d/override.conf" ) #just filenames relative to ${ETC_DIR_REMOTE}
+declare -a -r ETC_FILES_TO_COPY=( "bash_completion" "bash.bashrc" "nanorc" "Muttrc" "aliases" "aliases.db" "default/plexmediaserver" "default/smartmontools" "default/ssh" "default/tftpd-hpa" "exports" "hostname" "hosts" "mailname" "ntp.conf" "smartd.conf" "swapspace.conf" "systemd/system/apt-update.service" "systemd/system/apt-update.timer" "systemd/system/smartbulbserver.service" "systemd/system/tplinkSmartAppServer.service" "udev/rules.d/40-uinput.rules" "udev/rules.d/70-persistent-net.rules" "udev/rules.d/99-usb-serial.rules" "watchdog.conf" "default/watchdog" "systemd/system/docker.service.d/override.conf" "sysctl.d/99-diskover-docker.conf" "ddclient.conf" ) #just filenames relative to ${ETC_DIR_REMOTE}
 ### "logrotate.conf" "systemd/system/deluged.service" "systemd/system/delugeweb.service" "modprobe.d/watchdog.conf" "modules-load.d/watchdog.conf" "initramfs-tools/modules"
 declare -a -r ETC_DIRS_TO_COPY=( "bash_completion.d" "byobu" "Muttrc.d" "xpra" "get_iplayer" "grafana" "influxdb" "kapacitor" "mysql" "postfix" "pushover" "ssh" "systemd/network" "systemd/system/docker.service.d" "telegraf" "webmin" ) #just directory names relative to ${ETC_DIR_REMOTE}
 ### "logrotate.d"
@@ -145,7 +145,7 @@ declare -r DOCKER_COMPOSE_BASH_COMPLETION_TEMP="/tmp/docker-compose-bash-complet
 declare -r DOCKER_COMPOSE_BASH_COMPLETION_LOCAL="${BASH_COMPLETION_LOCAL}/docker-compose"
 declare -r PUSHOVER_BASH_GIT_URL="git@github.com:akusei/pushover-bash.git"
 declare -r PUSHOVER_BASH_DIR_LOCAL="${GIT_DIR_LOCAL}/pushover-bash"
-declare -r PLEX_SERVER_URL="https://downloads.plex.tv/plex-media-server-new/1.19.5.3035-864bbcbb7/debian/plexmediaserver_1.19.5.3035-864bbcbb7_amd64.deb"
+declare -r PLEX_SERVER_URL="https://downloads.plex.tv/plex-media-server-new/1.20.0.3181-0800642ec/debian/plexmediaserver_1.20.0.3181-0800642ec_amd64.deb"
 declare -r APT_SOURCES_REMOTE="${ETC_DIR_REMOTE}/apt/sources.list.d"
 declare -r APT_SOURCES_LOCAL="${ETC_DIR_LOCAL}/apt/sources.list.d"
 declare -r APT_TRUSTED_REMOTE="${ETC_DIR_REMOTE}/apt/trusted.gpg.d"
@@ -209,6 +209,8 @@ declare -r GET_IPLAYER_DIR_LOCAL="${GIT_DIR_LOCAL}/get-iplayer"
 declare -r NANO_SYNTAX_HIGHLIGHT_GIT_URL="git@github.com:scopatz/nanorc.git"
 declare -r NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL="${GIT_DIR_LOCAL}/nano_highlighting"
 declare -r NANO_SYNTAX_HIGHLIGHT_DIR_GLOBAL_LOCAL="/usr/share/nano-syntax-highlighting"
+declare -r ARGBASH_GIT_URL="git@github.com:matejak/argbash.git"
+declare -r ARG_BASH_DIR_LOCAL="${GIT_DIR_LOCAL}/argbash"
 declare -r PROG_NAME="makeServer"
 declare -r PROG_VER="1.0"
 declare -r AUTHOR="Alex Wood"
@@ -335,6 +337,7 @@ function setupGit()
 	runCommand "${USER_NAME}" "git config --global core.sshCommand 'ssh -i ${USER_SSH_DIR_LOCAL}/github_rsa -F /dev/null'"
 	runCommand "${USER_NAME}" "git config --global user.signingKey 5CB32EC33C62EB47"
 	runCommand "${USER_NAME}" "git config --global commit.gpgSign true"
+    runCommand "${USER_NAME}" "git config --global pull.rebase false"
 
     #it may be a Man in the Middle security hole, but a prompt to accept an rsa key in a script is a bad thing
     #also, everyone just types yes, and never checks the fingerprint anyway
@@ -646,8 +649,8 @@ function installGetIplayer()
     #This just tells CPAN to autosetup itslef, so we don;t get a prompt whilst running the script
     sudo perl -MCPAN -e 'my $c = "CPAN::HandleConfig"; $c->load(doit => 1, autoconfig => 1); $c->edit(prerequisites_policy => "follow"); $c->edit(build_requires_install_policy => "yes"); $c->commit'
     runCommand "${ROOT_USER_NAME}" "cpan -u" &>"${logfile}"
-    runCommand "${ROOT_USER_NAME}" "cpan -u install CPAN" &>>"${logfile}"
-    runCommand "${ROOT_USER_NAME}" "cpan -u install LWP LWP::Protocol::https XML::LibXML Mojolicious CGI HTTP::Request CPAN::DistnameInfo HTML::HeadParser Log::Log4perl YAML HTML::Entities" &>>"${logfile}"
+    runCommand "${ROOT_USER_NAME}" "cpan install CPAN YAML" &>>"${logfile}"
+    runCommand "${ROOT_USER_NAME}" "cpan install LWP LWP::Protocol::https XML::LibXML Mojolicious CGI HTTP::Request CPAN::DistnameInfo HTML::HeadParser Log::Log4perl YAML HTML::Entities" &>>"${logfile}"
 
     #dependancies atomic parsely installed via initial apt install and ffmpeg separately via installffmpeg()
 
@@ -676,6 +679,32 @@ function installNanoHighlighting()
     cd "${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL}"
     makeDirectory "${NANO_SYNTAX_HIGHLIGHT_DIR_GLOBAL_LOCAL}" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
     runCommand "${ROOT_USER_NAME}" "cp -v "${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL}"/*.nanorc "${NANO_SYNTAX_HIGHLIGHT_DIR_GLOBAL_LOCAL}"/" &>>"${logfile}"
+}
+
+function installArgsBash()
+{
+    local logfile="${USER_INSTALLERS_DIR_LOCAL}/nano-highlighting-install.log"
+    local locationToInstall="${NANO_SYNTAX_HIGHLIGHT_DIR_LOCAL}"
+    local permissions="${USER_NAME}:${GROUP_NAME}"
+    local gitRepo="${NANO_SYNTAX_HIGHLIGHT_GIT_URL}"
+    infoText "Nano Syntax Highlighting (Logging to ${logfile})" ${INFO_TEXT_INSTALL}
+
+    cd "${GIT_DIR_LOCAL}"
+    makeDirectory "${locationToInstall}" "${permissions}"
+    runCommand "${permissions%:*}" "git clone ${gitRepo} '$(basename ${locationToInstall})'" &>"${logfile}"
+    cd "${locationToInstall}"
+
+    cd "resources"
+    #there is a varaible m,issing from the man page definitions file, causing a man page compilation error
+    echo -e "\n.. |OPTION_IN_PLACE| replace:: \\ \n" >> argbash-defs.rst
+    sudo apt-get install python3-docutils &>"${logfile}"
+    sudo make install INSTALL_COMPLETION=yes PREFIX=/usr . &>"${logfile}"
+    make check &>"${logfile}"
+    retVal=$?
+    if [ "${retVal}" != "0" ]
+    then
+        errorText "ArgBash did not install correctly.  make check returned exit code [${retVal}]"
+    fi
 }
 
 function copySystemFiles()
@@ -722,6 +751,9 @@ function copyEtcFiles()
 {
 	infoText "[${ETC_DIR_LOCAL}]" ${INFO_TEXT_COPY}
     copyStuff "ETC" "${ROOT_USER_NAME}:${ROOT_USER_NAME}"
+
+    #grafana config directory needs to be owned by grafana user
+    runCommand "${ROOT_USER_NAME}" "chown -R grafana:grafana '${ETC_DIR_LOCAL}/grafana'"
 }
 
 function copyVarFiles()
@@ -946,6 +978,12 @@ installGDrive "${GDRIVE_MOUNTPOINT}"
 
 ##installing vglrun for xpra
 installVglrun
+
+##Installing better syntax highlighting for nano
+installNanoHighlighting
+
+##install ArgBash auomated script arguement creation utility
+installArgsBash
 
 #####Copy over files and dirs
 ##makeServer files
