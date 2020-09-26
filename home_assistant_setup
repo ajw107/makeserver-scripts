@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+sudo -s <<EOF
 #constants
 declare -r INSTALL_SCRIPT_LOCATION="${PWD}/home-assistant-install-scripts"
 declare -r CURRENT_USER="${USER}"
@@ -42,7 +43,6 @@ function infoText ()
 }
 
 #main code
-sudo -s <<EOF
 infoText "Setting Locale to GB..."
 localectl set-keymap gb
 localectl set-x11-keymap gb extd
