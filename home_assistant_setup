@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+
+#constants
+declare -r INSTALL_SCRIPT_LOCATION="${PWD}/home-assistant-install-scripts"
+declare -r CURRENT_USER="${USER}"
+declare -r NORMAL_TEXT="$(tput sgr0)" &>/dev/null # No Color
+declare -r RED_TEXT="$(tput setaf 1)" &>/dev/null
+declare -r WHITE_TEXT="$(tput setaf 7)" &>/dev/null
+declare -r BLUE_TEXT="$(tput setaf 4)" &>/dev/null
+declare -r RED_BACKGROUND="$(tput setab 1)" &>/dev/null
+declare -r BLUE_BACKGROUND="$(tput setab 4)" &>/dev/null
+declare -r YELLOW_BACKGROUND="$(tput setab 3)" &>/dev/null
+declare -r BLINK="$(tput blink)" &>/dev/null
+declare -r BOLD="$(tput bold)" &>/dev/null
+declare -r ERROR_BLINK_TEXT=${NORMAL_TEXT}${RED_BACKGROUND}${WHITE_TEXT}${BLINK}${BOLD} &>/dev/null
+declare -r ERROR_NORMAL_TEXT=${NORMAL_TEXT}${RED_TEXT}${BOLD} &>/dev/null
+declare -r ERROR_TEXT_START="${ERROR_BLINK_TEXT}ERROR${ERROR_NORMAL_TEXT}: " &>/dev/null
+declare -r WARNING_TEXT_START="${BLUE_BACKGROUND}${WHITE_TEXT}${BOLD}${BLINK}WARNING${NORMAL_TEXT}: " &>/dev/null
+declare -r INFO_TEXT_START="${YELLOW_BACKGROUND}${BLUE_TEXT}${BOLD}${BLINK}INFO${NORMAL_TEXT}: " &>/dev/null
+
+#functions
+function errorText ()
+{
+    local msgText="${1}"
+
+    printf "${ERROR_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+
+function warnText ()
+{
+    local msgText="${1}"
+
+    printf "${WARNING_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+function infoText ()
+{
+    local msgText="${1}"
+
+    printf "${INFO_TEXT_START}${msgText}${NORMAL_TEXT}\n"
+}
+
+#main code
+sudo -s <<EOF
+infoText "Setting Locale to GB..."
+localectl set-keymap gb
+localectl set-x11-keymap gb extd
+#sudo dpkg-reconfigure locales
+localectl set-locale en_GB.UTF-8
+timedatectl set-timezone Europe/London
+
+infoText "Installing Required Softeare Packages..."
+apt install -y software-properties-common apparmor-utils apt-transport-https avahi-daemon ca-certificates curl dbus jq network-manager git
+
+infoText "Disabling ModemManager as it will interfer with serial devices..."
+systemctl disable ModemManager
+systemctl stop ModemManager
+if [ systemctl is-enabled ModemManager.service | grep -i "enabled" > /dev/null ]
+then
+    errorText "Failed to disable ModemManager Servrvice, please diable manually and re-run this script"
+    exit 1
+fi
+
+infoText "Installing Docker..."
+curl -fsSL get.docker.com | sh
+usermod -aG docker "${CURRENT_USER}"
+infoText "[${CURRENT_USER}] added to docker group"
+
+infoText "Downloading main install script..."
+git clone https://github.com/Kanga-Who/home-assistant "${INSTALL_SCRIPT_LOCATION}"
+cd "${INSTALL_SCRIPT_LOCATION}"
+
+infoText "Executing main install script..."
+bash -- supervised-installer.sh -m raspberrypi4
+EOF
