@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-
-sudo -s <<EOF
-#constants
 declare -r INSTALL_SCRIPT_LOCATION="${PWD}/home-assistant-install-scripts"
 declare -r CURRENT_USER="${USER}"
+
+#constants
 declare -r NORMAL_TEXT="$(tput sgr0)" &>/dev/null # No Color
 declare -r RED_TEXT="$(tput setaf 1)" &>/dev/null
 declare -r WHITE_TEXT="$(tput setaf 7)" &>/dev/null
@@ -18,6 +17,16 @@ declare -r ERROR_NORMAL_TEXT=${NORMAL_TEXT}${RED_TEXT}${BOLD} &>/dev/null
 declare -r ERROR_TEXT_START="${ERROR_BLINK_TEXT}ERROR${ERROR_NORMAL_TEXT}: " &>/dev/null
 declare -r WARNING_TEXT_START="${BLUE_BACKGROUND}${WHITE_TEXT}${BOLD}${BLINK}WARNING${NORMAL_TEXT}: " &>/dev/null
 declare -r INFO_TEXT_START="${YELLOW_BACKGROUND}${BLUE_TEXT}${BOLD}${BLINK}INFO${NORMAL_TEXT}: " &>/dev/null
+declare -r SSD_QUIRK="usb-storage.quirks=152d:0578:u"
+declare -r KEYBOARD_LAYOUT="gb"
+declare -r KEYBOARD_VARIANT="extd"
+declare -r LOCALE="en_GB.UTF-8"
+declare -r TIMEZONE="Europe/London"
+declare -r SWAP_SIZE_GB="3"
+declare -r SWAP_LOCATION="/swapfile"
+declare -r FSTAB_LOCATION="/etc/fstab"
+declare -r CMDLINE_LOCATION="/boot/firmware/cmdline.txt"
+
 
 #functions
 function errorText ()
@@ -43,28 +52,53 @@ function infoText ()
 }
 
 #main code
-infoText "Setting Locale to GB..."
-localectl set-keymap gb
-localectl set-x11-keymap gb extd
+infoText "Disabling Wifi to stop power mgmnt messages..."
+sudo nmcli radio wifi off
+infoText "Setting Locale to ${KEYBOARD_LAYOUT^^}..."
+sudo localectl set-keymap "${KEYBOARD_LAYOUT}"
+sudo localectl set-x11-keymap "${KEYBOARD_LAYOUT}" "${KEYBOARD_VARIANT}"
 #sudo dpkg-reconfigure locales
-localectl set-locale en_GB.UTF-8
-timedatectl set-timezone Europe/London
+sudo localectl set-locale "${LOCALE}"
+sudo timedatectl set-timezone "${TIMEZONE}"
+
+#No need to set up swap file if one already exists
+if [[ "$(cat /etc/fstab)" == *"swap"* ]] && [[ $(swapon --noheadings | wc -l) -gt 0 ]]
+then
+    infoText "Swap file already set up and in use, no need to create one..."
+else
+    infoText "Setting up ${SWAP_SIZE_GB}GB Swap file at [${SWAP_LOCATION}]..."
+    sudo fallocate -l "${SWAP_SIZE_GB}G" "${SWAP_LOCATION}"
+    sudo chmod 600 "${SWAP_LOCATION}"
+    sudo mkswap "${SWAP_LOCATION}"
+    sudo swapon "${SWAP_LOCATION}"
+    echo "${SWAP_LOCATION} none swap sw 0 0" | sudo tee -a "${FSTAB_LOCATION}"
+    swapon --show
+    free -h
+fi
+
+if [[ ! "$(cat "${CMDLINE_LOCATION}")" =~ ^"${SSD_QUIRK}".* ]]
+then
+    infoText "Compensating for rubbish NVME Enclosure..."
+    #insert (i) the text at the start of the file (line 1)
+    sudo sed -i "1s/^/${SSD_QUIRK} /" "${CMDLINE_LOCATION}"
+fi
+read -p "boo"
 
 infoText "Installing Required Softeare Packages..."
-apt install -y software-properties-common apparmor-utils apt-transport-https avahi-daemon ca-certificates curl dbus jq network-manager git
+sudo apt install -y software-properties-common apparmor-utils apt-transport-https avahi-daemon ca-certificates curl dbus jq network-manager git
 
 infoText "Disabling ModemManager as it will interfer with serial devices..."
-systemctl disable ModemManager
-systemctl stop ModemManager
-if [ systemctl is-enabled ModemManager.service | grep -i "enabled" > /dev/null ]
+sudo systemctl disable ModemManager
+sudo systemctl stop ModemManager
+if [ $(systemctl is-enabled ModemManager.service | grep -i "enabled" > /dev/null) ]
 then
     errorText "Failed to disable ModemManager Servrvice, please diable manually and re-run this script"
     exit 1
 fi
 
 infoText "Installing Docker..."
-curl -fsSL get.docker.com | sh
-usermod -aG docker "${CURRENT_USER}"
+curl -fsSL get.docker.com | sudo sh
+sudo usermod -aG docker "${CURRENT_USER}"
 infoText "[${CURRENT_USER}] added to docker group"
 
 infoText "Downloading main install script..."
@@ -72,5 +106,6 @@ git clone https://github.com/Kanga-Who/home-assistant "${INSTALL_SCRIPT_LOCATION
 cd "${INSTALL_SCRIPT_LOCATION}"
 
 infoText "Executing main install script..."
-bash -- supervised-installer.sh -m raspberrypi4
-EOF
+sudo bash -- supervised-installer.sh -m raspberrypi4
+#sudo bash -s <<EOF
+#EOF
